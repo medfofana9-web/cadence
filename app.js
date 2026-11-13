@@ -862,12 +862,13 @@ async function importOne(j, known) {
   const reliable = meta.isReliable(tags);
   const t = {
     id: hash, hash, ...(reliable ? { title: tags.title, artist: tags.artist, album: tags.album } : names),
-    albumArtist: tags.albumArtist || '', genre: tags.genre || '', year: tags.year || '', trackNo: tags.track || '', disc: tags.disc || '',
+    albumArtist: tags.albumArtist || '', genre: meta.cleanGenre(tags.genre), year: tags.year || '', trackNo: tags.track || '', disc: tags.disc || '',
     gain: tags.gain, file: f.name, size: f.size, type: f.type || '', addedAt: Date.now(), plays: 0, liked: false, local: true, cloud: false,
     original: { title: tags.title || '', artist: tags.artist || '', album: tags.album || '', genre: tags.genre || '', file: f.name },
   };
   const ft = (t.title.match(/\((?:feat\.?|ft\.?|with)\s+([^)]+)\)/i) || t.artist.match(/ (?:feat\.?|ft\.?|featuring) (.+)$/i) || [])[1];
   if (ft) t.featured = ft.split(/, | & /).map(s => s.trim());
+  t.artist = meta.tidyArtist(t.artist);
   t.category = meta.categorize(t);
   Object.assign(j, { title: t.title, artist: t.artist }); updateImportRow(j);
   t.duration = await meta.audioDuration(f);
@@ -1511,13 +1512,14 @@ async function rematch(t, { online = navigator.onLine } = {}) {
   let art = null;
   if (found) {
     Object.assign(t, reliable ? base : { title: found.title, artist: found.artist, album: found.album || base.album });
-    Object.assign(t, { genre: o.genre || found.genre || '', year: found.year || t.year, explicit: found.explicit, matched: true });
+    Object.assign(t, { genre: meta.cleanGenre(o.genre) || found.genre || '', year: found.year || t.year, explicit: found.explicit, matched: true });
     art = await fileArt(t);
     if (!art || !reliable) try { art = await meta.fetchImage(found.artUrl); } catch {}
   } else {
-    Object.assign(t, base, { genre: o.genre || '', year: reliable ? t.year : '', explicit: undefined, matched: false });
+    Object.assign(t, base, { genre: meta.cleanGenre(o.genre), year: reliable ? t.year : '', explicit: undefined, matched: false });
     art = await fileArt(t);
   }
+  t.artist = meta.tidyArtist(t.artist);
   t.category = meta.categorize(t);
   t.designedCover = !art;
   if (!art) art = await meta.makeCover(t.title, t.artist, t.category);
@@ -1544,11 +1546,14 @@ async function repairMatches() {
 }
 /** One-time clean-up with the improved name rules (download-site labels, joined artist + title, odd characters). */
 async function recleanNames() {
-  if (await kv.get('reclean-v3')) return;
+  if (await kv.get('reclean-v4')) return;
   const known = knownArtists();
   const todo = [];
   for (const t of S.tracks.values()) {
-    if (t.edited || t.matched) continue;
+    if (t.edited) continue;
+    const g = meta.cleanGenre(t.genre), a = meta.tidyArtist(t.artist);
+    if (g !== (t.genre || '') || a !== t.artist) { t.genre = g; t.artist = a; await saveTrack(t); }
+    if (t.matched) continue;
     const o = await originalOf(t);
     if (meta.isReliable(o)) continue;
     const base = meta.cleanNames(o, o.file || t.file || '', known.filter(a => a !== t.artist));
@@ -1556,7 +1561,7 @@ async function recleanNames() {
   }
   let changed = 0;
   for (const t of todo) { const before = t.title + t.artist; await rematch(t); if (t.title + t.artist !== before) changed++; }
-  await kv.set('reclean-v3', true);
+  await kv.set('reclean-v4', true);
   if (changed) { S.ver++; render(); toast(`Cleaned up ${count(changed)} with messy names`); }
 }
 async function refixAll() {
