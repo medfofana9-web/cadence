@@ -212,6 +212,8 @@ async function syncDown() {
     if (st?.data) mergeState(st.data);
     S.lastSync = Date.now();
     queueStatePush();
+    // songs added on this device before signing in go up to the cloud on their own
+    if ([...S.tracks.values()].some(t => t.local && !t.cloud) && !uploading) uploadLocal({ quiet: true });
   } catch (e) { syncFailed(e); }
 }
 function mergeState(d) {
@@ -1728,11 +1730,14 @@ async function refixAll() {
   for (const t of ts) if (await rematch(t)) matched++;
   S.ver++; render(); toast(`Done · ${matched} matched to the right song, the rest keep their own details`);
 }
-async function uploadLocal() {
+let uploading = false;
+async function uploadLocal({ quiet = false } = {}) {
+  if (uploading) return; uploading = true;
   const ts = [...S.tracks.values()].filter(t => t.local && !t.cloud);
-  let n = 0; toast(`Uploading ${count(ts.length)}…`);
+  let n = 0; toast(`Uploading ${count(ts.length)} to your cloud library…`);
   for (const t of ts) { try { const a = await db.get('audio', t.id); const art = await db.get('art', t.id); if (a) { await uploadTrack(t, a, art); n++; } } catch (e) { syncFailed(e); break; } }
-  toast(`Uploaded ${count(n)}`); render();
+  uploading = false;
+  if (n || !quiet) toast(`${count(n)} now on all your devices`); render();
 }
 function exportData() {
   const data = { exportedAt: new Date().toISOString(), app: 'Cadence', songs: [...S.tracks.values()].map(({ colors, ...t }) => t), playlists: [...S.playlists.values()], listeningLog: S.log, recentlyPlayed: S.history, settings: S.settings };
@@ -1842,7 +1847,7 @@ document.addEventListener('click', async e => {
           else { const live = await cloud.signUp(email, pass); if (!live) { a.disabled = false; return toast('Check your email to confirm your account, then sign in here'); } }
           S.user = await cloud.user(); await syncDown(); render();
           const localOnly = [...S.tracks.values()].filter(t => t.local && !t.cloud).length;
-          toast('Signed in', localOnly ? [`Upload ${localOnly} song${localOnly > 1 ? 's' : ''}`, uploadLocal] : null);
+          toast(localOnly ? 'Signed in · uploading your songs' : 'Signed in');
         } catch (err) { a.disabled = false; toast(/invalid login/i.test(err.message) ? 'Email or password is wrong' : err.message || 'Couldn’t sign in'); }
         return;
       }
