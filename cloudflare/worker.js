@@ -67,6 +67,25 @@ export default {
     const path = decodeURIComponent(url.pathname.slice(3));
     if (!path || path.includes('..')) return json({ error: 'bad path' }, 400);
 
+    // Large files (long mixes) go up in parts: Workers accept at most 100 MB per request.
+    //   POST /f/<path>?mp=create → { uploadId }
+    //   PUT  /f/<path>?mp=<uploadId>&part=<n>  (body = one part) → { partNumber, etag }
+    //   POST /f/<path>?mp=<uploadId>&done=1  { parts:[{partNumber,etag}] } → { ok }
+    const mp = url.searchParams.get('mp');
+    if (mp) {
+      const uid = await userId(req, env);
+      if (!uid || !path.startsWith(uid + '/')) return json({ error: 'not allowed' }, 403);
+      if (mp === 'create' && req.method === 'POST') {
+        const up = await env.BUCKET.createMultipartUpload(path, { httpMetadata: { contentType: req.headers.get('content-type') || 'application/octet-stream', cacheControl: 'private, max-age=31536000, immutable' } });
+        return json({ uploadId: up.uploadId });
+      }
+      const up = env.BUCKET.resumeMultipartUpload(path, mp);
+      if (req.method === 'PUT') { const part = await up.uploadPart(+url.searchParams.get('part'), req.body); return json({ partNumber: part.partNumber, etag: part.etag }); }
+      if (req.method === 'POST' && url.searchParams.get('done')) { const { parts = [] } = await req.json(); await up.complete(parts); return json({ ok: true }); }
+      if (req.method === 'DELETE') { await up.abort(); return json({ ok: true }); }
+      return json({ error: 'method' }, 405);
+    }
+
     if (req.method === 'PUT' || req.method === 'DELETE') {
       const uid = await userId(req, env);
       if (!uid || !path.startsWith(uid + '/')) return json({ error: 'not allowed' }, 403);
@@ -86,7 +105,7 @@ export default {
       h.set('etag', obj.httpEtag);
       h.set('accept-ranges', 'bytes');
       let status = 200;
-      if (obj.range && ('offset' in obj.range || 'suffix' in obj.range)) {
+      if (req.headers.has('range') && obj.range && ('offset' in obj.range || 'suffix' in obj.range)) {
         const start = 'suffix' in obj.range ? obj.size - obj.range.suffix : obj.range.offset;
         const len = 'suffix' in obj.range ? obj.range.suffix : (obj.range.length ?? (obj.size - start));
         h.set('content-range', `bytes ${start}-${start + len - 1}/${obj.size}`);
