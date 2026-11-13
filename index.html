@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cadence">
+<title>Cadence</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <div class="brand"><img src="icons/icon.svg" alt=""><span>Cadence</span></div>
+    <nav>
+      <a data-route="home" class="nav-link"><svg><use href="#i-home"/></svg>Home</a>
+      <a data-route="search" class="nav-link"><svg><use href="#i-search"/></svg>Search</a>
+      <div class="nav-label">Library</div>
+      <a data-route="songs" class="nav-link"><svg><use href="#i-note"/></svg>Songs</a>
+      <a data-route="artists" class="nav-link"><svg><use href="#i-mic"/></svg>Artists</a>
+      <a data-route="albums" class="nav-link"><svg><use href="#i-album"/></svg>Albums</a>
+      <a data-route="liked" class="nav-link"><svg><use href="#i-heart"/></svg>Liked</a>
+      <div class="nav-label">Playlists <button class="icon-btn small" data-action="new-playlist" title="New playlist"><svg><use href="#i-plus"/></svg></button></div>
+      <div id="sidebar-playlists"></div>
+    </nav>
+    <div class="sidebar-foot">
+      <a data-route="import" class="nav-link"><svg><use href="#i-upload"/></svg>Add music</a>
+      <a data-route="settings" class="nav-link"><svg><use href="#i-gear"/></svg>Settings</a>
+    </div>
+  </aside>
+
+  <main id="main"><div id="view"></div></main>
+
+  <footer id="player" class="player empty">
+    <div class="p-track" data-action="open-now">
+      <div class="p-art"><img id="p-art" alt=""></div>
+      <div class="p-meta"><div id="p-title" class="ellipsis">Nothing playing</div><div id="p-artist" class="ellipsis muted"></div></div>
+      <button class="icon-btn like-btn" id="p-like" data-action="like-current" title="Like"><svg><use href="#i-heart"/></svg></button>
+    </div>
+    <div class="p-center">
+      <div class="p-controls">
+        <button class="icon-btn mode" id="p-shuffle" data-action="shuffle" title="Shuffle"><svg><use href="#i-shuffle"/></svg></button>
+        <button class="icon-btn" data-action="prev" title="Previous"><svg><use href="#i-prev"/></svg></button>
+        <button class="play-btn" id="p-play" data-action="toggle" title="Play"><svg><use href="#i-play"/></svg></button>
+        <button class="icon-btn" data-action="next" title="Next"><svg><use href="#i-next"/></svg></button>
+        <button class="icon-btn mode" id="p-repeat" data-action="repeat" title="Repeat"><svg><use href="#i-repeat"/></svg></button>
+      </div>
+      <div class="p-progress"><span id="p-cur" class="time">0:00</span><input type="range" id="p-seek" min="0" max="1000" value="0" class="seek"><span id="p-dur" class="time">0:00</span></div>
+    </div>
+    <div class="p-right">
+      <button class="icon-btn" data-action="open-lyrics" title="Lyrics"><svg><use href="#i-quote"/></svg></button>
+      <button class="icon-btn" data-action="open-queue" title="Up next"><svg><use href="#i-queue"/></svg></button>
+      <div class="vol"><svg><use href="#i-vol"/></svg><input type="range" id="p-vol" min="0" max="100" value="100"></div>
+    </div>
+    <button class="play-btn mini-only" id="p-play-mini" data-action="toggle"><svg><use href="#i-play"/></svg></button>
+    <div class="mini-progress"><div id="p-mini-bar"></div></div>
+  </footer>
+
+  <nav class="tabbar">
+    <a data-route="home"><svg><use href="#i-home"/></svg><span>Home</span></a>
+    <a data-route="search"><svg><use href="#i-search"/></svg><span>Search</span></a>
+    <a data-route="library"><svg><use href="#i-library"/></svg><span>Library</span></a>
+    <a data-route="import"><svg><use href="#i-upload"/></svg><span>Add</span></a>
+  </nav>
+</div>
+
+<section id="now" class="now" aria-hidden="true">
+  <div class="now-bg"><img id="now-bg" alt=""></div>
+  <header class="now-head">
+    <button class="icon-btn" data-action="close-now" title="Close"><svg><use href="#i-down"/></svg></button>
+    <div class="now-from muted" id="now-from"></div>
+    <button class="icon-btn" data-action="track-menu-current" title="More"><svg><use href="#i-more"/></svg></button>
+  </header>
+  <div class="now-body">
+    <div class="now-left">
+      <div class="now-art"><img id="now-art" alt=""></div>
+      <div class="now-meta">
+        <div><h2 id="now-title" class="ellipsis"></h2><div id="now-artist" class="muted ellipsis"></div></div>
+        <button class="icon-btn like-btn big" id="now-like" data-action="like-current"><svg><use href="#i-heart"/></svg></button>
+      </div>
+      <div class="now-progress">
+        <input type="range" id="now-seek" min="0" max="1000" value="0" class="seek">
+        <div class="now-times"><span id="now-cur">0:00</span><span id="now-dur">0:00</span></div>
+      </div>
+      <div class="now-controls">
+        <button class="icon-btn mode" id="now-shuffle" data-action="shuffle"><svg><use href="#i-shuffle"/></svg></button>
+        <button class="icon-btn big" data-action="prev"><svg><use href="#i-prev"/></svg></button>
+        <button class="play-btn huge" id="now-play" data-action="toggle"><svg><use href="#i-play"/></svg></button>
+        <button class="icon-btn big" data-action="next"><svg><use href="#i-next"/></svg></button>
+        <button class="icon-btn mode" id="now-repeat" data-action="repeat"><svg><use href="#i-repeat"/></svg></button>
+      </div>
+      <div class="now-tools">
+        <button class="pill-btn" data-action="tab-lyrics" id="tab-lyrics"><svg><use href="#i-quote"/></svg>Lyrics</button>
+        <button class="pill-btn" data-action="tab-queue" id="tab-queue"><svg><use href="#i-queue"/></svg>Up next</button>
+        <button class="pill-btn" data-action="speed" id="speed-btn">1×</button>
+        <button class="pill-btn" data-action="sleep" id="sleep-btn"><svg><use href="#i-moon"/></svg><span>Sleep</span></button>
+      </div>
+    </div>
+    <div class="now-right" id="now-panel"></div>
+  </div>
+</section>
+
+<div id="sheet-root"></div>
+<div id="toast" class="toast"></div>
+<div id="update-bar" class="update-bar"><span>A new version of Cadence is ready.</span><button data-action="apply-update">Update</button></div>
+<input type="file" id="file-input" multiple accept="audio/*,.mp3,.m4a,.flac,.wav,.aac,.ogg,.opus" hidden>
+<input type="file" id="folder-input" webkitdirectory directory multiple hidden>
+<input type="file" id="art-input" accept="image/*" hidden>
+<audio id="audio" preload="auto" playsinline></audio>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M9 18.5a3 3 0 1 1-2-2.83V5.2l12-2.4v12.7a3 3 0 1 1-2-2.83V7.4l-8 1.6z"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z"/></symbol>
+    <symbol id="i-album" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 13a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.6C1.5 7.4 3.7 4 7.2 4c2 0 3.6 1.1 4.8 2.7C13.2 5.1 14.8 4 16.8 4c3.5 0 5.7 3.4 4.5 6.9-1.8 5-9.3 9.6-9.3 9.6z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 1.7-1l2.4 1 2-3.4zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><path d="M4 3h3v18H4zm5 0h3v18H9zm5.2.7 2.9-.8 4.7 17.4-2.9.8z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.6v14.8a1 1 0 0 0 1.5.86l12.3-7.4a1 1 0 0 0 0-1.72L8.5 3.74A1 1 0 0 0 7 4.6z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="5.5" y="4" width="4.5" height="16" rx="1.2"/><rect x="14" y="4" width="4.5" height="16" rx="1.2"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M3.5 6.2v11.6a.8.8 0 0 0 1.2.68L13 13.4V17.8a.8.8 0 0 0 1.2.68l8.6-5.8a.8.8 0 0 0 0-1.36L14.2 5.52a.8.8 0 0 0-1.2.68v4.4L4.7 5.52a.8.8 0 0 0-1.2.68z"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M20.5 6.2v11.6a.8.8 0 0 1-1.2.68L11 13.4V17.8a.8.8 0 0 1-1.2.68l-8.6-5.8a.8.8 0 0 1 0-1.36L9.8 5.52a.8.8 0 0 1 1.2.68v4.4l8.3-5.08a.8.8 0 0 1 1.2.68z"/></symbol>
+    <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 7h3.5c2 0 3.2.9 4.3 2.5l2.4 3.6c1.1 1.6 2.3 2.4 4.3 2.4H20M3 17h3.5c1.5 0 2.5-.5 3.3-1.4M13.2 8.4c.8-.9 1.8-1.4 3.3-1.4H20M17.5 4.5 20 7l-2.5 2.5m0 5L20 17l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 11V9.5A3.5 3.5 0 0 1 7.5 6H19m-3-3 3 3-3 3M20 13v1.5a3.5 3.5 0 0 1-3.5 3.5H5m3 3-3-3 3-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-repeat1" viewBox="0 0 24 24"><path d="M4 11V9.5A3.5 3.5 0 0 1 7.5 6H19m-3-3 3 3-3 3M20 13v1.5a3.5 3.5 0 0 1-3.5 3.5H5m3 3-3-3 3-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M11.2 10.3 12.6 9.5V14.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-quote" viewBox="0 0 24 24"><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-9l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm3 4.2v1.6h10V9.2zm0 3.2V14h6.5v-1.6z"/></symbol>
+    <symbol id="i-queue" viewBox="0 0 24 24"><path d="M3 5h13v2H3zm0 5h13v2H3zm0 5h8v2H3zm11 0v6l5-3z"/></symbol>
+    <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 19a5 5 0 0 1-.9-9.9A6.5 6.5 0 0 1 18.6 10 4.5 4.5 0 0 1 18 19z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+<script type="module" src="app.js"></script>
+</body>
+</html>
