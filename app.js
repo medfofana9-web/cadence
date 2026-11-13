@@ -62,7 +62,7 @@ function artOf(t, size = 'thumb') {
   if (!t) return PLACEHOLDER;
   if (size === 'thumb' && S.thumbs.has(t.id)) return S.thumbs.get(t.id);
   if (S.art.has(t.id)) return S.art.get(t.id);
-  if (t.cloud) { const u = cloud.cachedUrl('art/' + t.id, t.store === 'r2'); if (u) return u; }
+  if (t.cloud) { const u = cloud.cachedUrl('art/' + t.id, t.store === 'r2' || cloud.r2On()); if (u) return u; }
   return PLACEHOLDER;
 }
 function swapUrl(map, id, blob) { const old = map.get(id); if (old?.startsWith('blob:')) URL.revokeObjectURL(old); map.set(id, URL.createObjectURL(blob)); }
@@ -198,7 +198,7 @@ async function syncDown() {
       }
       const needArt = rows.filter(r => !r.deleted && !S.art.has(r.id)).map(r => r.id);
       if (needArt.length) {
-        const isR2 = id => S.tracks.get(id)?.store === 'r2';
+        const isR2 = id => S.tracks.get(id)?.store === 'r2' || cloud.r2On();
         await cloud.fileUrls(needArt.filter(isR2).map(id => 'art/' + id), true);
         await cloud.fileUrls(needArt.filter(id => !isR2(id)).map(id => 'art/' + id));
         changed = true; cacheCloudArt(needArt);
@@ -240,7 +240,7 @@ async function cacheCloudArt(ids) {
   const list = [...ids]; let done = 0, last = Date.now();
   const worker = async () => {
     for (let id; (id = list.shift());) {
-      const t = S.tracks.get(id); const u = t && cloud.cachedUrl('art/' + id, t.store === 'r2'); if (!u) continue;
+      const t = S.tracks.get(id); const u = t && cloud.cachedUrl('art/' + id, t.store === 'r2' || cloud.r2On()); if (!u) continue;
       try {
         const r = await fetch(u); if (!r.ok) continue;
         const b = await r.blob(); if (!b.size || !/^image\//.test(b.type)) continue;
@@ -261,7 +261,7 @@ async function repairArt() {
     if (!b || !/^image\//.test(b.type || '') || !(await thumbnail(b))) { await db.del('art', t.id); const u = S.art.get(t.id); if (u?.startsWith('blob:')) URL.revokeObjectURL(u); S.art.delete(t.id); bad.push(t.id); }
   }
   if (!bad.length || !S.user) return;
-  const isR2 = id => S.tracks.get(id)?.store === 'r2';
+  const isR2 = id => S.tracks.get(id)?.store === 'r2' || cloud.r2On();
   await cloud.fileUrls(bad.filter(isR2).map(id => 'art/' + id), true);
   await cloud.fileUrls(bad.filter(id => !isR2(id)).map(id => 'art/' + id));
   render(); cacheCloudArt(bad);
@@ -1409,7 +1409,7 @@ async function srcFor(t) {
     for (const [id, u] of P.objUrls) if (id !== t.id && id !== current()?.id && id !== P.preloadFor) { URL.revokeObjectURL(u); P.objUrls.delete(id); }
     return P.objUrls.get(t.id);
   }
-  if (t.cloud && S.user) return await cloud.fileUrl('audio/' + t.id, t.store === 'r2');
+  if (t.cloud && S.user) { try { return await cloud.fileUrl('audio/' + t.id, t.store === 'r2' || cloud.r2On()); } catch (e) { console.warn('file', e); return null; } }
   return null;
 }
 const gainFor = t => S.settings.leveling ? t.gain : undefined;
@@ -1420,7 +1420,7 @@ async function loadTrack(id, { autoplay = true, quiet = false } = {}) {
   flushListen();
   const src = await srcFor(t);
   if (!src) {
-    if (!quiet) toast(!t.local && t.cloud && !S.user ? 'Sign in to play songs from your cloud library' : !navigator.onLine && t.cloud ? 'You’re offline and this song isn’t saved on this device' : 'This song isn’t available on this device');
+    if (!quiet) toast(!t.local && t.cloud && !S.user ? 'Sign in to play songs from your cloud library' : !navigator.onLine && t.cloud ? 'You’re offline and this song isn’t saved on this device' : t.cloud && cloud.lastFileError ? `Couldn’t reach your music (${cloud.lastFileError}). Try again in a moment.` : 'This song isn’t available on this device');
     return false;
   }
   P.preloadFor = null; P.fadeStarted = false; P.counted = false; P.lyrics = null; P.lyricLine = -1; P.follow = true;
