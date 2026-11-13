@@ -153,6 +153,7 @@ async function boot() {
     P.played = (saved.played || []).filter(id => S.tracks.has(id));
     if (P.idx >= 0 && P.queue.length) { const ok = await loadTrack(P.queue[P.idx], { autoplay: false, quiet: true }); if (ok && saved.time) seekWhenReady(saved.time); }
   }
+  if (/iP(hone|ad|od)/.test(navigator.userAgent) && !navigator.standalone) { document.documentElement.classList.add('ios-browser'); try { if (!localStorage.getItem('cadence-a2hs')) { localStorage.setItem('cadence-a2hs', '1'); setTimeout(() => toast('For full screen: tap Share, then Add to Home Screen'), 2500); } } catch {} }
   renderSidebar();
   window.addEventListener('hashchange', route);
   route();
@@ -182,6 +183,7 @@ async function initCloud() {
   } catch (e) { console.warn('cloud', e); }
 }
 
+let artRepaired = false;
 async function syncDown() {
   if (!S.user) return;
   try {
@@ -220,6 +222,7 @@ async function syncDown() {
     // songs added on this device before signing in go up to the cloud on their own
     if ([...S.tracks.values()].some(t => t.local && !t.cloud) && !uploading) await uploadLocal({ quiet: true });
     migrateToR2();
+    if (!artRepaired) { artRepaired = true; repairArt(); }
   } catch (e) { syncFailed(e); }
 }
 function mergeState(d) {
@@ -234,11 +237,34 @@ function mergeState(d) {
   kv.set('log', S.log); kv.set('history', S.history); kv.set('ctxs', S.ctxs); kv.set('dupIgnore', S.dupIgnore);
 }
 async function cacheCloudArt(ids) {
-  for (const id of ids) {
-    const t = S.tracks.get(id); const u = t && cloud.cachedUrl('art/' + id, t.store === 'r2'); if (!u || !t) continue;
-    try { const b = await (await fetch(u)).blob(); if (b.size) { await setArt(t, b); await db.put('tracks', t.id, t); } } catch {}
+  const list = [...ids]; let done = 0, last = Date.now();
+  const worker = async () => {
+    for (let id; (id = list.shift());) {
+      const t = S.tracks.get(id); const u = t && cloud.cachedUrl('art/' + id, t.store === 'r2'); if (!u) continue;
+      try {
+        const r = await fetch(u); if (!r.ok) continue;
+        const b = await r.blob(); if (!b.size || !/^image\//.test(b.type)) continue;
+        await setArt(t, b); await db.put('tracks', t.id, t); done++;
+      } catch {}
+      if (Date.now() - last > 1500) { last = Date.now(); S.indexDirty = true; render(); }
+    }
+  };
+  await Promise.all([1, 2, 3, 4, 5, 6].map(worker));
+  if (done) { S.indexDirty = true; render(); }
+}
+/** Artwork saved while files were moving can be an error page instead of a picture: drop it so it downloads again. */
+async function repairArt() {
+  const bad = [];
+  for (const t of S.tracks.values()) {
+    if (!S.art.has(t.id) || S.thumbs.has(t.id)) continue;
+    const b = await db.get('art', t.id);
+    if (!b || !/^image\//.test(b.type || '') || !(await thumbnail(b))) { await db.del('art', t.id); const u = S.art.get(t.id); if (u?.startsWith('blob:')) URL.revokeObjectURL(u); S.art.delete(t.id); bad.push(t.id); }
   }
-  render();
+  if (!bad.length || !S.user) return;
+  const isR2 = id => S.tracks.get(id)?.store === 'r2';
+  await cloud.fileUrls(bad.filter(isR2).map(id => 'art/' + id), true);
+  await cloud.fileUrls(bad.filter(id => !isR2(id)).map(id => 'art/' + id));
+  render(); cacheCloudArt(bad);
 }
 async function cachePlaylistCover(id) {
   try { const r2 = S.playlists.get(id)?.coverStore === 'r2'; await cloud.fileUrls(['art/pl-' + id], r2); const u = cloud.cachedUrl('art/pl-' + id, r2); if (!u) return; const b = await (await fetch(u)).blob(); if (b.size) { await db.put('art', 'pl:' + id, b); swapUrl(S.plCovers, id, b); render(); } } catch {}
