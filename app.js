@@ -158,6 +158,7 @@ async function boot() {
   route();
   updateModes();
   backfillArt();
+  repairMatches();
   initCloud();
   checkVersion();
   setInterval(checkVersion, 10 * 60 * 1000);
@@ -874,11 +875,11 @@ async function importOne(j, known) {
   let artBlob = tags.picture?.size > 2000 ? tags.picture : null;
   if (S.settings.autoFix && t.category === 'Music' && (!reliable || !artBlob)) {
     j.status = 'Finding artwork'; updateImportRow(j);
-    const found = await meta.lookup(t);
+    const found = await meta.lookup({ title: t.title, artist: t.artist, duration: t.duration });
     if (found) {
       if (!reliable) Object.assign(t, { title: found.title, artist: found.artist, album: found.album || t.album });
       Object.assign(t, { genre: t.genre || found.genre || '', year: t.year || found.year || '', explicit: found.explicit, matched: true });
-      if (!artBlob) try { artBlob = await meta.fetchImage(found.artUrl); } catch {}
+      if (!artBlob || !reliable) try { artBlob = await meta.fetchImage(found.artUrl); } catch {}
     }
   }
   if (!artBlob) { artBlob = await meta.makeCover(t.title, t.artist, t.category); t.designedCover = true; }
@@ -1438,7 +1439,7 @@ function editSheet(id) {
     const v = k => el.querySelector('#ed-' + k);
     v('find').onclick = async () => {
       v('find').disabled = true; v('find').textContent = 'Looking…';
-      const found = await meta.lookup({ title: v('title').value, artist: v('artist').value });
+      const found = await meta.lookup({ title: v('title').value, artist: v('artist').value, duration: t.duration });
       v('find').disabled = false; v('find').textContent = 'Find artwork & details';
       if (!found) return toast(navigator.onLine ? 'No match found. Try fixing the title or artist first.' : 'You’re offline');
       v('title').value = found.title; v('artist').value = found.artist; v('album').value = found.album; v('genre').value = found.genre || v('genre').value; v('year').value = found.year || v('year').value;
@@ -1475,21 +1476,69 @@ function confirmDelete(id) {
     render(); toast('Removed from your library');
   });
 }
+/** The song's details as they were in the file, before any clean-up or lookup. */
+async function originalOf(t) {
+  if (t.original?.file || t.original?.title) return { ...t.original, file: t.original.file || t.file };
+  const blob = t.local ? await db.get('audio', t.id) : null;
+  const tags = blob ? await meta.readTags(blob) : {};
+  t.original = { title: tags.title || '', artist: tags.artist || '', album: tags.album || '', genre: tags.genre || '', file: t.file || '' };
+  return t.original;
+}
+async function fileArt(t) {
+  const blob = t.local ? await db.get('audio', t.id) : null;
+  if (blob) { const tags = await meta.readTags(blob); if (tags.picture?.size > 2000) return tags.picture; }
+  return null;
+}
+/**
+ * Re-checks one song from its original file details. Applies a lookup only when it passes the strict
+ * artist + title + length checks; otherwise puts back the cleaned-up file details and the file's own artwork.
+ */
+async function rematch(t, { online = navigator.onLine } = {}) {
+  const o = await originalOf(t);
+  const reliable = meta.isReliable(o);
+  const base = reliable ? { title: o.title, artist: o.artist, album: o.album } : meta.cleanNames(o, o.file || t.file || '');
+  const found = online && meta.categorize({ ...t, ...base }) === 'Music' ? await meta.lookup({ ...base, duration: t.duration }) : null;
+  let art = null;
+  if (found) {
+    Object.assign(t, reliable ? base : { title: found.title, artist: found.artist, album: found.album || base.album });
+    Object.assign(t, { genre: o.genre || found.genre || '', year: found.year || t.year, explicit: found.explicit, matched: true });
+    art = await fileArt(t);
+    if (!art || !reliable) try { art = await meta.fetchImage(found.artUrl); } catch {}
+  } else {
+    Object.assign(t, base, { genre: o.genre || '', year: reliable ? t.year : '', explicit: undefined, matched: false });
+    art = await fileArt(t);
+  }
+  t.category = meta.categorize(t);
+  t.designedCover = !art;
+  if (!art) art = await meta.makeCover(t.title, t.artist, t.category);
+  await setArt(t, art); await db.del('lyrics', t.id);
+  if (S.user && t.cloud) cloud.uploadFile('art/' + t.id, art).catch(syncFailed);
+  await saveTrack(t);
+  if (current()?.id === t.id) { paintNow(t); updateMediaSession(t); P.lyrics = null; }
+  return !!found;
+}
+/** One-time repair: songs that an older, looser lookup gave the wrong artist or artwork. */
+async function repairMatches() {
+  if (await kv.get('repair-v2')) return;
+  const bad = [];
+  for (const t of S.tracks.values()) {
+    if (!t.matched || t.edited) continue;
+    const o = await originalOf(t);
+    if (meta.isReliable(o)) continue;
+    const base = meta.cleanNames(o, o.file || t.file || '');
+    if (meta.wrongArtist(base.artist, t.artist)) bad.push(t);
+  }
+  for (const t of bad) await rematch(t);
+  await kv.set('repair-v2', true);
+  if (bad.length) { S.ver++; render(); toast(`Fixed ${count(bad.length)} that had the wrong artist or artwork`); }
+}
 async function refixAll() {
-  const ts = [...S.tracks.values()].filter(t => !t.edited && t.category === 'Music');
+  const ts = [...S.tracks.values()].filter(t => !t.edited);
   if (!navigator.onLine) return toast('You’re offline');
   toast(`Checking ${count(ts.length)}…`);
-  let fixed = 0;
-  for (const t of ts) {
-    const found = await meta.lookup(t);
-    if (!found) continue;
-    const reliable = t.original && meta.isReliable({ title: t.original.title, artist: t.original.artist, album: t.original.album });
-    if (!reliable) Object.assign(t, { title: found.title, artist: found.artist, album: found.album || t.album });
-    Object.assign(t, { genre: t.genre || found.genre, year: t.year || found.year, explicit: found.explicit, matched: true });
-    if (t.designedCover || !S.art.has(t.id)) { try { const b = await meta.fetchImage(found.artUrl); await setArt(t, b); t.designedCover = false; if (S.user && t.cloud) await cloud.uploadFile('art/' + t.id, b); } catch {} }
-    await saveTrack(t); fixed++;
-  }
-  S.ver++; render(); toast(`Updated ${count(fixed)}`);
+  let matched = 0;
+  for (const t of ts) if (await rematch(t)) matched++;
+  S.ver++; render(); toast(`Done · ${matched} matched to the right song, the rest keep their own details`);
 }
 async function uploadLocal() {
   const ts = [...S.tracks.values()].filter(t => t.local && !t.cloud);
