@@ -13,25 +13,27 @@
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="stylesheet" href="styles.css">
+<link rel="apple-touch-startup-image" href="icons/icon-512.png">
 </head>
 <body>
 <div id="app">
   <aside class="sidebar">
     <div class="brand"><img src="icons/icon.svg" alt=""><span>Cadence</span></div>
     <nav>
-      <a data-route="home" class="nav-link"><svg><use href="#i-home"/></svg>Home</a>
-      <a data-route="search" class="nav-link"><svg><use href="#i-search"/></svg>Search</a>
+      <a data-route="home" href="#/home" class="nav-link"><svg><use href="#i-home"/></svg>Home</a>
+      <a data-route="search" href="#/search" class="nav-link"><svg><use href="#i-search"/></svg>Search</a>
       <div class="nav-label">Library</div>
-      <a data-route="songs" class="nav-link"><svg><use href="#i-note"/></svg>Songs</a>
-      <a data-route="artists" class="nav-link"><svg><use href="#i-mic"/></svg>Artists</a>
-      <a data-route="albums" class="nav-link"><svg><use href="#i-album"/></svg>Albums</a>
-      <a data-route="liked" class="nav-link"><svg><use href="#i-heart"/></svg>Liked</a>
-      <div class="nav-label">Playlists <button class="icon-btn small" data-action="new-playlist" title="New playlist"><svg><use href="#i-plus"/></svg></button></div>
+      <a data-route="songs" href="#/songs" class="nav-link"><svg><use href="#i-note"/></svg>Songs</a>
+      <a data-route="artists" href="#/artists" class="nav-link"><svg><use href="#i-mic"/></svg>Artists</a>
+      <a data-route="albums" href="#/albums" class="nav-link"><svg><use href="#i-album"/></svg>Albums</a>
+      <a data-route="liked" href="#/liked" class="nav-link"><svg><use href="#i-heart"/></svg>Liked Songs</a>
+      <a data-route="insights" href="#/insights" class="nav-link"><svg><use href="#i-chart"/></svg>Your listening</a>
+      <div class="nav-label">Playlists <button class="icon-btn small" data-action="new-playlist" aria-label="New playlist"><svg><use href="#i-plus"/></svg></button></div>
       <div id="sidebar-playlists"></div>
     </nav>
     <div class="sidebar-foot">
-      <a data-route="import" class="nav-link"><svg><use href="#i-upload"/></svg>Add music</a>
-      <a data-route="settings" class="nav-link"><svg><use href="#i-gear"/></svg>Settings</a>
+      <a data-route="import" href="#/import" class="nav-link"><svg><use href="#i-upload"/></svg>Add music</a>
+      <a data-route="settings" href="#/settings" class="nav-link"><svg><use href="#i-gear"/></svg>Settings</a>
     </div>
   </aside>
 
@@ -41,51 +43,51 @@
     <div class="p-track" data-action="open-now">
       <div class="p-art"><img id="p-art" alt=""></div>
       <div class="p-meta"><div id="p-title" class="ellipsis">Nothing playing</div><div id="p-artist" class="ellipsis muted"></div></div>
-      <button class="icon-btn like-btn" id="p-like" data-action="like-current" title="Like"><svg><use href="#i-heart"/></svg></button>
+      <button class="icon-btn like-btn" id="p-like" data-action="like-current" aria-label="Like"><svg><use href="#i-heart"/></svg></button>
     </div>
     <div class="p-center">
       <div class="p-controls">
-        <button class="icon-btn mode" id="p-shuffle" data-action="shuffle" title="Shuffle"><svg><use href="#i-shuffle"/></svg></button>
-        <button class="icon-btn" data-action="prev" title="Previous"><svg><use href="#i-prev"/></svg></button>
-        <button class="play-btn" id="p-play" data-action="toggle" title="Play"><svg><use href="#i-play"/></svg></button>
-        <button class="icon-btn" data-action="next" title="Next"><svg><use href="#i-next"/></svg></button>
-        <button class="icon-btn mode" id="p-repeat" data-action="repeat" title="Repeat"><svg><use href="#i-repeat"/></svg></button>
+        <button class="icon-btn mode" id="p-shuffle" data-action="shuffle" aria-label="Shuffle"><svg><use href="#i-shuffle"/></svg></button>
+        <button class="icon-btn" data-action="prev" aria-label="Previous"><svg><use href="#i-prev"/></svg></button>
+        <button class="play-btn" id="p-play" data-action="toggle" aria-label="Play"><svg><use href="#i-play"/></svg></button>
+        <button class="icon-btn" data-action="next" aria-label="Next"><svg><use href="#i-next"/></svg></button>
+        <button class="icon-btn mode" id="p-repeat" data-action="repeat" aria-label="Repeat"><svg><use href="#i-repeat"/></svg></button>
       </div>
-      <div class="p-progress"><span id="p-cur" class="time">0:00</span><input type="range" id="p-seek" min="0" max="1000" value="0" class="seek"><span id="p-dur" class="time">0:00</span></div>
+      <div class="p-progress"><span id="p-cur" class="time">0:00</span><input type="range" id="p-seek" min="0" max="1000" value="0" class="seek" aria-label="Seek"><span id="p-dur" class="time">0:00</span></div>
     </div>
     <div class="p-right">
-      <button class="icon-btn" data-action="open-lyrics" title="Lyrics"><svg><use href="#i-quote"/></svg></button>
-      <button class="icon-btn" data-action="open-queue" title="Up next"><svg><use href="#i-queue"/></svg></button>
-      <div class="vol"><svg><use href="#i-vol"/></svg><input type="range" id="p-vol" min="0" max="100" value="100"></div>
+      <button class="icon-btn" data-action="open-lyrics" aria-label="Lyrics"><svg><use href="#i-quote"/></svg></button>
+      <button class="icon-btn" data-action="open-queue" aria-label="Up next"><svg><use href="#i-queue"/></svg></button>
+      <div class="vol"><svg id="vol-icon"><use href="#i-vol"/></svg><input type="range" id="p-vol" min="0" max="100" value="100" aria-label="Volume"></div>
     </div>
     <button class="play-btn mini-only" id="p-play-mini" data-action="toggle"><svg><use href="#i-play"/></svg></button>
     <div class="mini-progress"><div id="p-mini-bar"></div></div>
   </footer>
 
   <nav class="tabbar">
-    <a data-route="home"><svg><use href="#i-home"/></svg><span>Home</span></a>
-    <a data-route="search"><svg><use href="#i-search"/></svg><span>Search</span></a>
-    <a data-route="library"><svg><use href="#i-library"/></svg><span>Library</span></a>
-    <a data-route="import"><svg><use href="#i-upload"/></svg><span>Add</span></a>
+    <a data-route="home" href="#/home"><svg><use href="#i-home"/></svg><span>Home</span></a>
+    <a data-route="search" href="#/search"><svg><use href="#i-search"/></svg><span>Search</span></a>
+    <a data-route="library" href="#/library"><svg><use href="#i-library"/></svg><span>Library</span></a>
+    <a data-route="import" href="#/import"><svg><use href="#i-upload"/></svg><span>Add</span></a>
   </nav>
 </div>
 
 <section id="now" class="now" aria-hidden="true">
-  <div class="now-bg"><img id="now-bg" alt=""></div>
+  <div class="now-bg" id="now-bg"><div class="bgl on"></div><div class="bgl"></div></div>
   <header class="now-head">
-    <button class="icon-btn" data-action="close-now" title="Close"><svg><use href="#i-down"/></svg></button>
+    <button class="icon-btn" data-action="close-now" aria-label="Close"><svg><use href="#i-down"/></svg></button>
     <div class="now-from muted" id="now-from"></div>
-    <button class="icon-btn" data-action="track-menu-current" title="More"><svg><use href="#i-more"/></svg></button>
+    <div class="now-head-r"><button class="icon-btn" id="lyrics-expand" data-action="lyrics-full" aria-label="Full-screen lyrics"><svg><use href="#i-expand"/></svg></button><button class="icon-btn" data-action="track-menu-current" aria-label="More"><svg><use href="#i-more"/></svg></button></div>
   </header>
   <div class="now-body">
     <div class="now-left">
       <div class="now-art"><img id="now-art" alt=""></div>
       <div class="now-meta">
-        <div><h2 id="now-title" class="ellipsis"></h2><div id="now-artist" class="muted ellipsis"></div></div>
+        <div><h2 id="now-title" class="ellipsis"></h2><a id="now-artist" class="ellipsis" href="#/home"></a></div>
         <button class="icon-btn like-btn big" id="now-like" data-action="like-current"><svg><use href="#i-heart"/></svg></button>
       </div>
       <div class="now-progress">
-        <input type="range" id="now-seek" min="0" max="1000" value="0" class="seek">
+        <input type="range" id="now-seek" min="0" max="1000" value="0" class="seek" aria-label="Seek">
         <div class="now-times"><span id="now-cur">0:00</span><span id="now-dur">0:00</span></div>
       </div>
       <div class="now-controls">
@@ -102,7 +104,7 @@
         <button class="pill-btn" data-action="sleep" id="sleep-btn"><svg><use href="#i-moon"/></svg><span>Sleep</span></button>
       </div>
     </div>
-    <div class="now-right" id="now-panel"></div>
+    <div class="now-right"><div id="now-panel" class="now-panel"></div><button class="pill-btn lyrics-return" id="lyrics-return" data-action="lyrics-return" hidden>Back to current line</button></div>
   </div>
 </section>
 
@@ -113,6 +115,7 @@
 <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
 <input type="file" id="art-input" accept="image/*" hidden>
 <audio id="audio" preload="auto" playsinline></audio>
+<audio id="audio-b" preload="auto" playsinline></audio>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
@@ -142,6 +145,14 @@
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
     <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 19a5 5 0 0 1-.9-9.9A6.5 6.5 0 0 1 18.6 10 4.5 4.5 0 0 1 18 19z"/></symbol>
+    <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-radio" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><path d="M8.1 15.9a5.5 5.5 0 0 1 0-7.8m7.8 0a5.5 5.5 0 0 1 0 7.8M5.3 18.7a9.5 9.5 0 0 1 0-13.4m13.4 0a9.5 9.5 0 0 1 0 13.4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+    <symbol id="i-flow" viewBox="0 0 24 24"><path d="M3 9c3 0 3-4 6-4s3 4 6 4 3-4 6-4M3 15c3 0 3-4 6-4s3 4 6 4 3-4 6-4M3 21c3 0 3-4 6-4s3 4 6 4 3-4 6-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" transform="translate(0 -1.5)"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2.5l2.2 6.6 6.8.4-5.3 4.3 1.8 6.7L12 16.7l-5.5 3.8 1.8-6.7L3 9.5l6.8-.4z"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><rect x="4" y="12" width="3.6" height="8" rx="1"/><rect x="10.2" y="7" width="3.6" height="13" rx="1"/><rect x="16.4" y="3.5" width="3.6" height="16.5" rx="1"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="m16 9.5 5 5m0-5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   </defs>
 </svg>
