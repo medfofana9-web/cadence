@@ -1512,13 +1512,25 @@ function paintNow(t) {
   markPlaying();
 }
 let bgLayer = 0, bdLayer = 0;
+/** Richer version of an artwork color for the backdrop; greys stay grey-ish instead of turning neon. */
+function vivid(hex, light, boost) {
+  const n = parseInt(hex.slice(1), 16), r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l0 = (mx + mn) / 2;
+  let h = 0; const s0 = d ? d / (1 - Math.abs(2 * l0 - 1)) : 0;
+  if (d) h = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  const s1 = Math.min(.6, s0 < .08 ? s0 : s0 * boost + .06);
+  const c = (1 - Math.abs(2 * light - 1)) * s1, x = c * (1 - Math.abs(h % 2 - 1)), m = light - c / 2;
+  const [R, G, B] = h < 1 ? [c, x, 0] : h < 2 ? [x, c, 0] : h < 3 ? [0, c, x] : h < 4 ? [0, x, c] : h < 5 ? [x, 0, c] : [c, 0, x];
+  return '#' + [R, G, B].map(v => Math.round((v + m) * 255).toString(16).padStart(2, '0')).join('');
+}
 /** The whole app sits on a slow-moving field of color taken from the song that's playing. */
 function setBackdrop(c) {
   const layers = $$('#backdrop .bd'); if (layers.length < 2) return;
   const key = c ? c.base + c.glow + c.accent : 'none';
   if (layers[bdLayer].dataset.key === key) return;
   bdLayer = 1 - bdLayer;
-  const l = layers[bdLayer]; l.dataset.key = key; l.style.cssText = c ? ambient(c) : '';
+  const l = layers[bdLayer]; l.dataset.key = key;
+  l.style.cssText = c ? `--amb-base:${vivid(c.base, .3, 1.6)};--amb-glow:${vivid(c.glow, .44, 2)};--amb-accent:${vivid(c.accent, .56, 2.2)}` : '';
   l.classList.add('on'); layers[1 - bdLayer].classList.remove('on');
 }
 function setNowBg(c) {
