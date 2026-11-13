@@ -28,6 +28,7 @@
       <a data-route="albums" href="#/albums" class="nav-link"><svg><use href="#i-album"/></svg>Albums</a>
       <a data-route="liked" href="#/liked" class="nav-link"><svg><use href="#i-heart"/></svg>Liked Songs</a>
       <a data-route="insights" href="#/insights" class="nav-link"><svg><use href="#i-chart"/></svg>Your listening</a>
+      <a data-route="review" href="#/review" class="nav-link" id="review-link" hidden><svg><use href="#i-check"/></svg>Check these<span class="badge-n"></span></a>
       <div class="nav-label">Playlists <button class="icon-btn small" data-action="new-playlist" aria-label="New playlist"><svg><use href="#i-plus"/></svg></button></div>
       <div id="sidebar-playlists"></div>
     </nav>
@@ -37,7 +38,7 @@
     </div>
   </aside>
 
-  <main id="main"><div id="view"></div></main>
+  <main id="main"><div class="folder-bar" id="folder-bar" hidden><span>Let Cadence look for new songs in your folder</span><button data-action="scan-folder">Allow</button></div><div id="view"></div></main>
 
   <footer id="player" class="player empty">
     <div class="p-track" data-action="open-now">
