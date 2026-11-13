@@ -605,7 +605,7 @@ VIEWS.home = () => {
   return `
   <div class="page-head home-head"><div><div class="eyebrow">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div><h1>${greeting()}</h1><div class="lede">${cur ? 'Pick up right where you left off.' : 'Your soundtrack starts here.'}</div></div>
     <button class="btn flow-btn" data-action="flow"><svg><use href="#i-flow"/></svg>Cadence Flow</button></div>
-  <section class="hero ${cur ? 'live' : ''}" style="${ambient(hero.colors)}">
+  <section class="hero ${cur ? 'live' : ''}" style="${richAmbient(hero.colors)}">
     <div class="hero-art" data-play-list="${heroKey}" data-i="0"><img src="${artOf(hero, 'full')}" alt=""></div>
     <div class="hero-info"><div class="eyebrow">${cur ? 'Continue listening' : recent.length ? 'Last played' : 'Newest in your library'}</div>
       <h1 class="ellipsis">${cur ? '<span class="eq hero-eq"><i></i><i></i><i></i></span>' : ''}${esc(hero.title)}</h1><div class="sub ellipsis">${esc(hero.artist)}${hero.album ? ' · ' + esc(hero.album) : ''}</div>
@@ -1524,6 +1524,7 @@ function vivid(hex, light, boost) {
   return '#' + [R, G, B].map(v => Math.round((v + m) * 255).toString(16).padStart(2, '0')).join('');
 }
 /** The whole app sits on a slow-moving field of color taken from the song that's playing. */
+const richAmbient = c => c ? `--amb-base:${vivid(c.base, .26, 1.5)};--amb-glow:${vivid(c.glow, .4, 1.8)};--amb-accent:${vivid(c.accent, .58, 2)}` : '';
 function setBackdrop(c) {
   const layers = $$('#backdrop .bd'); if (layers.length < 2) return;
   const key = c ? c.base + c.glow + c.accent : 'none';
