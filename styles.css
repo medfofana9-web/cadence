@@ -677,3 +677,77 @@ input[type=range]:hover::-moz-range-thumb,.setting-range::-moz-range-thumb{opaci
 .miss{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.8fr);gap:10px;padding:8px 12px;border-radius:9px;background:var(--surface);font-size:13.5px}
 .dl-done{color:var(--ok)}
 .badge-cover b{font:800 13px var(--display)}
+
+/* =====================================================================
+   Atmosphere: the app floats on the colors of what's playing
+   ===================================================================== */
+html,body{background:#060608}
+#backdrop{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;background:#060608}
+#app{position:relative;z-index:1}
+.bd{position:absolute;inset:-25%;opacity:0;transition:opacity 2.2s ease;will-change:transform,opacity;
+  --amb-glow:#2b3550;--amb-accent:#7a5a8c;--amb-base:#1c2a2a;
+  background:
+    radial-gradient(32% 38% at 24% 22%,color-mix(in srgb,var(--amb-glow) 95%,transparent) 0%,transparent 70%),
+    radial-gradient(28% 34% at 80% 28%,color-mix(in srgb,var(--amb-accent) 55%,transparent) 0%,transparent 72%),
+    radial-gradient(40% 44% at 62% 86%,color-mix(in srgb,var(--amb-base) 100%,transparent) 0%,transparent 74%),
+    radial-gradient(26% 30% at 12% 82%,color-mix(in srgb,var(--amb-accent) 30%,transparent) 0%,transparent 70%);
+  animation:bdDrift 46s ease-in-out infinite alternate}
+.bd:nth-child(2){animation-duration:58s;animation-direction:alternate-reverse}
+.bd.on{opacity:1}
+@keyframes bdDrift{0%{transform:translate3d(0,0,0) scale(1) rotate(0deg)}50%{transform:translate3d(4%,-3%,0) scale(1.1) rotate(6deg)}100%{transform:translate3d(-4%,3%,0) scale(1.04) rotate(-5deg)}}
+#backdrop::after{content:"";position:absolute;inset:0;z-index:1;
+  background:radial-gradient(120% 90% at 50% 0%,rgba(6,6,8,.18) 0%,rgba(6,6,8,.62) 60%,rgba(6,6,8,.86) 100%)}
+.bd-grain{position:absolute;inset:0;z-index:2;opacity:.07;mix-blend-mode:overlay;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");background-size:220px}
+.is-paused .bd{animation-play-state:paused}
+
+html[data-theme=light],[data-theme=light] body,[data-theme=light] #backdrop{background:#f3f2ef}
+[data-theme=light] .bd.on{opacity:.38}
+[data-theme=light] #backdrop::after{background:linear-gradient(180deg,rgba(243,242,239,.35),rgba(243,242,239,.82) 70%)}
+[data-theme=light] .bd-grain{opacity:.05;mix-blend-mode:multiply}
+
+/* surfaces become glass over the color field */
+.sidebar{background:rgba(8,8,11,.42);border-right:1px solid rgba(255,255,255,.055)}
+.player{background:rgba(9,9,12,.62);border-top:1px solid rgba(255,255,255,.06);backdrop-filter:blur(30px) saturate(1.4);-webkit-backdrop-filter:blur(30px) saturate(1.4)}
+.player::before{opacity:calc(var(--amb-o) * .7)}
+[data-theme=light] .sidebar{background:rgba(255,255,255,.45);border-color:rgba(0,0,0,.06)}
+[data-theme=light] .player{background:rgba(255,255,255,.72);border-color:rgba(0,0,0,.06)}
+.nav-link.active{background:rgba(255,255,255,.075);color:var(--text)}
+[data-theme=light] .nav-link.active{background:rgba(0,0,0,.055)}
+
+/* hero: a lit glass panel instead of a grey box */
+.hero{background:linear-gradient(135deg,rgba(255,255,255,.07),rgba(255,255,255,.015));border:1px solid rgba(255,255,255,.07);box-shadow:0 30px 80px -30px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.06);min-height:270px}
+[data-theme=light] .hero{background:rgba(255,255,255,.6);border-color:rgba(0,0,0,.05);box-shadow:0 20px 60px -30px rgba(0,0,0,.25)}
+.hero-art{width:216px;height:216px;border-radius:12px;box-shadow:0 30px 60px -12px color-mix(in srgb,var(--amb-base,#000) 80%,#000),0 0 0 1px rgba(255,255,255,.06)}
+.hero h1{font-size:46px;letter-spacing:-.038em;line-height:1.02}
+
+/* quieter review strip */
+.check-banner{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.06)}
+.check-banner:hover{background:rgba(255,255,255,.075)}
+[data-theme=light] .check-banner{background:rgba(255,255,255,.55);border-color:rgba(0,0,0,.05)}
+
+/* headings with more presence */
+.section-head h2{font-size:24px;letter-spacing:-.025em}
+.cover{background:rgba(255,255,255,.04);box-shadow:0 0 0 1px rgba(255,255,255,.05),0 14px 34px -10px rgba(0,0,0,.55)}
+.card{transition:transform .35s var(--ease)}
+.card:hover{transform:translateY(-3px)}
+
+/* daily mixes: one image, a color band, a clear number */
+.card.mix .cover>img{filter:saturate(1.05)}
+.mix-band{position:absolute;inset:auto 0 0 0;height:58%;display:flex;flex-direction:column;justify-content:flex-end;padding:12px 14px 13px;color:#fff;pointer-events:none;
+  background:linear-gradient(180deg,transparent 0%,color-mix(in srgb,var(--amb-base,#111) 70%,transparent) 42%,color-mix(in srgb,var(--amb-base,#111) 96%,#000) 100%)}
+.mix-band span{font:600 10.5px/1 var(--font);letter-spacing:.14em;text-transform:uppercase;opacity:.75}
+.mix-band b{font:700 40px/.95 var(--display);letter-spacing:-.04em;margin-top:4px}
+.mix-band em{font-style:normal;font-size:12px;font-weight:550;opacity:.8;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card.mix .hover-play{bottom:auto;top:10px}
+
+@media (max-width:820px){
+  .player{background:rgba(22,22,26,.72);backdrop-filter:blur(30px) saturate(1.5);-webkit-backdrop-filter:blur(30px) saturate(1.5);border:1px solid rgba(255,255,255,.07)}
+  [data-theme=light] .player{background:rgba(255,255,255,.8)}
+  .tabbar{background:rgba(8,8,11,.6);border-top-color:rgba(255,255,255,.06)}
+  [data-theme=light] .tabbar{background:rgba(255,255,255,.7)}
+  .hero{min-height:0}
+  .hero-art{width:140px;height:140px}
+  .hero h1{font-size:30px}
+  .mix-band b{font-size:32px}
+}
+@media (prefers-reduced-motion:reduce){.bd{animation:none}}

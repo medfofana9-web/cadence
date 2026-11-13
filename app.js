@@ -378,6 +378,16 @@ function collCard({ href, title, sub, tracks, round = false, img, badge }) {
     <div class="cover">${img ? `<img loading="lazy" decoding="async" src="${img}" alt="">` : collageHtml(tracks)}${badge ? `<span class="badge-cover">${badge}</span>` : ''}${tracks.length ? `<button class="hover-play" data-play-list="${key}" data-i="0" data-ctx-route="${esc(href)}" aria-label="Play"><svg><use href="#i-play"/></svg></button>` : ''}</div>
     <div class="t ellipsis">${esc(title)}</div><div class="s ellipsis">${esc(sub || '')}</div></div>`;
 }
+function mixCard(m) {
+  const href = 'daily/' + m.n, key = listKey(m.tracks.map(t => t.id), `Daily Mix ${m.n}`);
+  const lead = m.tracks.find(t => S.art.has(t.id) && !t.designedCover) || m.tracks[0];
+  const c = lead?.colors || colorsOf(m.tracks);
+  return `<div class="card mix" data-href="${href}" style="${ambient(c)}">
+    <div class="cover"><img loading="lazy" decoding="async" src="${artOf(lead)}" alt="">
+      <div class="mix-band"><span>Daily Mix</span><b>${String(m.n).padStart(2, '0')}</b>${m.genre ? `<em>${esc(m.genre)}</em>` : ''}</div>
+      <button class="hover-play" data-play-list="${key}" data-i="0" data-ctx-route="${href}" aria-label="Play"><svg><use href="#i-play"/></svg></button></div>
+    <div class="t ellipsis">${esc(m.sub)}</div><div class="s ellipsis">${count(m.tracks.length)}</div></div>`;
+}
 function tile({ href, title, tracks, img }) {
   const key = listKey(tracks.map(t => t.id), title);
   return `<div class="tile" data-href="${esc(href)}"><div class="tile-art">${img ? `<img loading="lazy" src="${img}" alt="">` : collageHtml(tracks)}</div><div class="tile-t ellipsis">${esc(title)}</div>
@@ -605,7 +615,7 @@ VIEWS.home = () => {
   </section>
   ${(() => { const n = reviewList().length; return n ? `<a class="check-banner" href="#/review"><div class="cb-stack">${reviewList().slice(0, 3).map(t => `<img src="${artOf(t)}" alt="">`).join('')}</div><div><b>${count(n)} to check</b><span>Quick look at names Cadence wasn’t sure about</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''; })()}
   ${ctxTiles.length ? `<section class="section"><div class="section-head"><h2>Jump back in</h2></div><div class="tiles">${ctxTiles.join('')}</div></section>` : ''}
-  ${dailies.length ? shelf('Your daily mixes', dailies.map(m => collCard({ href: 'daily/' + m.n, title: `Daily Mix ${m.n}`, sub: m.sub, tracks: m.tracks, badge: `<b>${m.n}</b>` })).join(''), { sub: 'Your artists, grouped by sound · reshuffled every day' }) : ''}
+  ${dailies.length ? shelf('Your daily mixes', dailies.map(mixCard).join(''), { sub: 'Your artists, grouped by sound · reshuffled every day' }) : ''}
   ${recent.length ? shelf('Recently played', recent.slice(0, 16).map((t, i) => trackCard(t, recentKey, i)).join(''), { more: 'smart/recently-played' }) : ''}
   ${shelf('Made for you', [
     ...smartCards.map(([k, d, ts]) => collCard({ href: 'smart/' + k, title: d.title, sub: d.desc, tracks: ts, badge: '<svg><use href="#i-spark"/></svg>' })),
@@ -1497,10 +1507,20 @@ function paintNow(t) {
   ['#p-like', '#now-like'].forEach(s => $(s).classList.toggle('on', !!t.liked));
   document.title = `${t.title} · ${t.artist}`;
   setNowBg(t.colors);
+  setBackdrop(t.colors);
   $('#player').style.cssText = ambient(t.colors);
   markPlaying();
 }
-let bgLayer = 0;
+let bgLayer = 0, bdLayer = 0;
+/** The whole app sits on a slow-moving field of color taken from the song that's playing. */
+function setBackdrop(c) {
+  const layers = $$('#backdrop .bd'); if (layers.length < 2) return;
+  const key = c ? c.base + c.glow + c.accent : 'none';
+  if (layers[bdLayer].dataset.key === key) return;
+  bdLayer = 1 - bdLayer;
+  const l = layers[bdLayer]; l.dataset.key = key; l.style.cssText = c ? ambient(c) : '';
+  l.classList.add('on'); layers[1 - bdLayer].classList.remove('on');
+}
 function setNowBg(c) {
   const layers = $$('#now-bg .bgl');
   const key = c ? c.base + c.glow : 'none';
