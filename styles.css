@@ -581,3 +581,8 @@ input[type=range]:hover::-moz-range-thumb,.setting-range::-moz-range-thumb{opaci
 [data-motion=reduce] *{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
 [data-motion=reduce] .now{transition:visibility 0s!important}
 .panel .chip,.settings-group .chip{background:var(--surface-2)}.panel .chip:hover{background:var(--surface-3)}
+
+.lyrics-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font:500 13px var(--font);letter-spacing:0;color:rgba(255,255,255,.45);margin-top:14px}
+.lyrics-tools .link{color:rgba(255,255,255,.7)}.lyrics-tools .link:hover{color:#fff}
+.lyrics-tools b{color:#fff;font-weight:600;min-width:40px;text-align:center}
+.lyrics-empty .pill-btn{margin-top:14px}

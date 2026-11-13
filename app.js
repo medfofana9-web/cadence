@@ -158,7 +158,7 @@ async function boot() {
   route();
   updateModes();
   backfillArt();
-  repairMatches();
+  repairMatches().then(recleanNames);
   initCloud();
   checkVersion();
   setInterval(checkVersion, 10 * 60 * 1000);
@@ -858,7 +858,7 @@ async function importOne(j, known) {
   }
   known.hashes.add(hash);
   const tags = await meta.readTags(f);
-  const names = meta.cleanNames(tags, f.name);
+  const names = meta.cleanNames(tags, f.name, knownArtists());
   const reliable = meta.isReliable(tags);
   const t = {
     id: hash, hash, ...(reliable ? { title: tags.title, artist: tags.artist, album: tags.album } : names),
@@ -875,7 +875,7 @@ async function importOne(j, known) {
   let artBlob = tags.picture?.size > 2000 ? tags.picture : null;
   if (S.settings.autoFix && t.category === 'Music' && (!reliable || !artBlob)) {
     j.status = 'Finding artwork'; updateImportRow(j);
-    const found = await meta.lookup({ title: t.title, artist: t.artist, duration: t.duration });
+    const found = await meta.lookup({ title: t.title, artist: t.artist, duration: t.duration }) || await meta.identify(`${t.artist === 'Unknown Artist' ? '' : t.artist} ${t.title}`.trim(), t.duration);
     if (found) {
       if (!reliable) Object.assign(t, { title: found.title, artist: found.artist, album: found.album || t.album });
       Object.assign(t, { genre: t.genre || found.genre || '', year: t.year || found.year || '', explicit: found.explicit, matched: true });
@@ -1228,19 +1228,22 @@ async function renderPanel() {
   if (!P.lyrics || P.lyrics.id !== t.id) {
     box.innerHTML = `<div class="lyrics-skel">${'<i></i>'.repeat(6)}</div>`;
     let l = await db.get('lyrics', t.id);
-    if (!l) { l = await meta.findLyrics(t); if (l) db.put('lyrics', t.id, l); else l = { none: true, offline: !navigator.onLine }; }
+    if (!l || l.v !== 2) { if (!navigator.onLine) l = { none: true, offline: true }; else { l = await meta.findLyrics(t); db.put('lyrics', t.id, l); } }
     if (current()?.id !== t.id || P.panel !== 'lyrics') return;
-    P.lyrics = { id: t.id, lines: l.synced ? meta.parseLrc(l.synced) : null, plain: l.plain, none: l.none, offline: l.offline };
+    P.lyrics = { id: t.id, lines: l.synced && !l.hidden ? meta.parseLrc(l.synced) : null, plain: l.hidden ? '' : l.plain, none: l.none || l.hidden, offline: l.offline, reason: l.hidden ? 'hidden' : l.reason, lengthDiffers: l.lengthDiffers };
     P.lyricLine = -1;
   }
-  if (P.lyrics.lines?.length) box.innerHTML = `<div class="lyrics" id="lyrics">${P.lyrics.lines.map((x, i) => `<p data-t="${x.t}" data-i="${i}">${esc(x.text) || '♪'}</p>`).join('')}<div class="lyrics-credit">Lyrics from LRCLIB</div></div>`;
-  else if (P.lyrics.plain) box.innerHTML = `<div class="lyrics plain">${P.lyrics.plain.split('\n').map(l => `<p>${esc(l) || '&nbsp;'}</p>`).join('')}<div class="lyrics-credit">Lyrics from LRCLIB · not time-synced</div></div>`;
-  else box.innerHTML = `<div class="lyrics-empty"><h2>No lyrics</h2><p>${P.lyrics.offline ? 'You’re offline. Lyrics load when you’re back online.' : t.category !== 'Music' ? 'Lyrics are only looked up for music.' : 'LRCLIB doesn’t have lyrics for this song.'}</p></div>`;
+  const off = t.lyricOffset || 0;
+  const tools = `<div class="lyrics-tools">${P.lyrics.lines ? `<span>Timing</span><button class="link" data-action="lyr-offset" data-d="-0.5">Earlier</button><b>${off > 0 ? '+' : ''}${off.toFixed(1)}s</b><button class="link" data-action="lyr-offset" data-d="0.5">Later</button><span class="sep">·</span>` : ''}<button class="link" data-action="lyr-wrong">Wrong lyrics?</button></div>`;
+  if (P.lyrics.lines?.length) box.innerHTML = `<div class="lyrics" id="lyrics">${P.lyrics.lines.map((x, i) => `<p data-t="${x.t}" data-i="${i}">${esc(x.text) || '♪'}</p>`).join('')}<div class="lyrics-credit">Lyrics from LRCLIB</div>${tools}</div>`;
+  else if (P.lyrics.plain) box.innerHTML = `<div class="lyrics plain">${P.lyrics.plain.split('\n').map(l => `<p>${esc(l) || '&nbsp;'}</p>`).join('')}<div class="lyrics-credit">Lyrics from LRCLIB · not time-synced${P.lyrics.lengthDiffers ? ' because your file’s length is different from the released song' : ''}</div>${tools}</div>`;
+  else box.innerHTML = `<div class="lyrics-empty"><h2>No lyrics</h2><p>${P.lyrics.offline ? 'You’re offline. Lyrics load when you’re back online.' : P.lyrics.reason === 'hidden' ? 'You hid the lyrics for this song.' : t.category !== 'Music' ? 'Lyrics are only looked up for music.' : P.lyrics.reason === 'unknown' ? 'Add the artist in Edit info so the right lyrics can be found.' : P.lyrics.reason === 'length' ? 'Lyrics exist, but your file’s length is too different from the released song to match them safely.' : 'No lyrics found for this exact song.'}</p>${P.lyrics.reason === 'hidden' ? '<button class="pill-btn" data-action="lyr-retry">Look again</button>' : ''}</div>`;
   $('#lyrics-return').hidden = true;
   if (P.lyrics.lines) syncLyrics(engine.el.currentTime, true);
 }
 function syncLyrics(c, force) {
   const L = P.lyrics.lines; let i = -1;
+  c += current()?.lyricOffset ? -current().lyricOffset : 0;
   for (let k = 0; k < L.length; k++) { if (L[k].t <= c + .3) i = k; else break; }
   if (i === P.lyricLine && !force) return;
   P.lyricLine = i;
@@ -1476,6 +1479,12 @@ function confirmDelete(id) {
     render(); toast('Removed from your library');
   });
 }
+/** Artist names already in your library, used to split names like "Benny the Butcher x Drake Buffalo". */
+function knownArtists() {
+  const out = new Set();
+  for (const t of S.tracks.values()) { if (!t.artist || /^unknown/i.test(t.artist)) continue; out.add(t.artist.replace(/ feat\. .*$/, '')); t.artist.split(/ feat\. | & |, | x /i).forEach(a => a.trim() && out.add(a.trim())); }
+  return [...out].filter(a => a.length > 1).sort((a, b) => b.length - a.length);
+}
 /** The song's details as they were in the file, before any clean-up or lookup. */
 async function originalOf(t) {
   if (t.original?.file || t.original?.title) return { ...t.original, file: t.original.file || t.file };
@@ -1496,8 +1505,9 @@ async function fileArt(t) {
 async function rematch(t, { online = navigator.onLine } = {}) {
   const o = await originalOf(t);
   const reliable = meta.isReliable(o);
-  const base = reliable ? { title: o.title, artist: o.artist, album: o.album } : meta.cleanNames(o, o.file || t.file || '');
-  const found = online && meta.categorize({ ...t, ...base }) === 'Music' ? await meta.lookup({ ...base, duration: t.duration }) : null;
+  const base = reliable ? { title: o.title, artist: o.artist, album: o.album } : meta.cleanNames(o, o.file || t.file || '', knownArtists().filter(a => a !== t.artist));
+  const music = meta.categorize({ ...t, ...base }) === 'Music';
+  const found = online && music ? (await meta.lookup({ ...base, duration: t.duration }) || await meta.identify(`${base.artist === 'Unknown Artist' ? '' : base.artist} ${base.title}`.trim(), t.duration)) : null;
   let art = null;
   if (found) {
     Object.assign(t, reliable ? base : { title: found.title, artist: found.artist, album: found.album || base.album });
@@ -1531,6 +1541,23 @@ async function repairMatches() {
   for (const t of bad) await rematch(t);
   await kv.set('repair-v2', true);
   if (bad.length) { S.ver++; render(); toast(`Fixed ${count(bad.length)} that had the wrong artist or artwork`); }
+}
+/** One-time clean-up with the improved name rules (download-site labels, joined artist + title, odd characters). */
+async function recleanNames() {
+  if (await kv.get('reclean-v3')) return;
+  const known = knownArtists();
+  const todo = [];
+  for (const t of S.tracks.values()) {
+    if (t.edited || t.matched) continue;
+    const o = await originalOf(t);
+    if (meta.isReliable(o)) continue;
+    const base = meta.cleanNames(o, o.file || t.file || '', known.filter(a => a !== t.artist));
+    if (base.title !== t.title || base.artist !== t.artist || t.artist === 'Unknown Artist') todo.push(t);
+  }
+  let changed = 0;
+  for (const t of todo) { const before = t.title + t.artist; await rematch(t); if (t.title + t.artist !== before) changed++; }
+  await kv.set('reclean-v3', true);
+  if (changed) { S.ver++; render(); toast(`Cleaned up ${count(changed)} with messy names`); }
 }
 async function refixAll() {
   const ts = [...S.tracks.values()].filter(t => !t.edited);
@@ -1591,6 +1618,9 @@ document.addEventListener('click', async e => {
         if (p === 'queue') n.classList.remove('lyrics-full');
         return renderPanel();
       }
+      case 'lyr-offset': { const t = current(); if (!t) return; t.lyricOffset = Math.round(((t.lyricOffset || 0) + +a.dataset.d) * 10) / 10; await saveTrack(t); renderPanel(); return; }
+      case 'lyr-wrong': { const t = current(); if (!t) return; await db.put('lyrics', t.id, { v: 2, none: true, hidden: true }); P.lyrics = null; renderPanel(); return toast('Lyrics hidden for this song', ['Undo', async () => { await db.del('lyrics', t.id); P.lyrics = null; renderPanel(); }]); }
+      case 'lyr-retry': { const t = current(); if (!t) return; await db.del('lyrics', t.id); P.lyrics = null; return renderPanel(); }
       case 'lyrics-full': return $('#now').classList.toggle('lyrics-full');
       case 'lyrics-return': P.follow = true; $('#lyrics-return').hidden = true; return syncLyrics(engine.el.currentTime, true);
       case 'queue-remove': { const i = +a.dataset.qi; const [rm] = P.queue.splice(i, 1); P.autoAdded.delete(rm); P.preloadFor = null; savePlayer(); return renderQueue(); }
