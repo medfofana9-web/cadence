@@ -644,3 +644,31 @@ input[type=range]:hover::-moz-range-thumb,.setting-range::-moz-range-thumb{opaci
   .rv-fields{grid-template-columns:1fr}.rv-actions{grid-column:1/-1;flex-direction:row;justify-content:flex-end}
   .folder-card{flex-wrap:wrap}
 }
+
+/* ---------- Phone: full player fits the screen and stays centered ---------- */
+@media (max-width:820px){
+  .now{height:100dvh}
+  .now-head{position:relative;z-index:3;flex:none;padding:8px 10px}
+  .now-body{grid-template-columns:minmax(0,1fr);min-height:0;padding:0 24px calc(14px + var(--safe-b));align-content:center}
+  .now-left{min-width:0;max-width:none;justify-content:flex-end;gap:0}
+  .now-art{width:min(100%,50dvh);max-width:none;max-height:none;margin:0 auto;border-radius:12px}
+  .now.paused .now-art{transform:scale(.94)}
+  .now-meta{margin-top:clamp(14px,3dvh,28px)}
+  #now-title{font-size:22px}
+  #now-artist{font-size:17px}
+  .now-progress{margin-top:clamp(10px,2dvh,18px)}
+  .now-controls{grid-template-columns:44px 1fr auto 1fr 44px;gap:0;margin:clamp(6px,1.5dvh,14px) 0 clamp(10px,2.5dvh,22px)}
+  .now-controls>:nth-child(2){justify-self:center}.now-controls>:nth-child(4){justify-self:center}
+  .now-controls .play-btn.huge{width:66px;height:66px}
+  .now-tools{gap:6px;justify-content:space-between;flex-wrap:nowrap}
+  .now-tools .pill-btn{height:34px;padding:0 12px;font-size:12.5px;background:rgba(255,255,255,.08)}
+  #speed-btn{display:none}
+  #sleep-btn span{display:none}#sleep-btn{padding:0 11px}
+  #sleep-btn.on span{display:inline}
+  .now.panel-open .now-right{bottom:calc(205px + var(--safe-b))}
+}
+@media (max-width:820px) and (max-height:700px){
+  .now-art{width:min(100%,40dvh)}
+}
+
+.now-is-open .toast{bottom:auto;top:calc(64px + var(--safe-t))}

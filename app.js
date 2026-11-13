@@ -1355,14 +1355,14 @@ function cycleSpeed() { P.speed = SPEEDS[(SPEEDS.indexOf(P.speed) + 1) % SPEEDS.
    ===================================================================== */
 function openNow(panel) {
   if (!current()) return;
-  const n = $('#now'); n.classList.add('open'); n.setAttribute('aria-hidden', 'false');
+  const n = $('#now'); n.classList.add('open'); n.setAttribute('aria-hidden', 'false'); document.body.classList.add('now-is-open');
   if (panel) { P.panel = panel; n.classList.add('panel-open'); } else if (innerWidth <= 820) n.classList.remove('panel-open');
   history.pushState({ now: true }, ''); P.nowState = true;
   renderPanel();
 }
 function closeNow(fromPop) {
   const n = $('#now'); if (!n.classList.contains('open')) return;
-  n.classList.remove('open', 'panel-open', 'lyrics-full'); n.setAttribute('aria-hidden', 'true');
+  n.classList.remove('open', 'panel-open', 'lyrics-full'); n.setAttribute('aria-hidden', 'true'); document.body.classList.remove('now-is-open');
   if (!fromPop && P.nowState) { P.nowState = false; history.back(); }
 }
 window.addEventListener('popstate', () => { if ($('#now').classList.contains('open')) { P.nowState = false; closeNow(true); } });
