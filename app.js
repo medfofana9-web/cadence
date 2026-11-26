@@ -2020,7 +2020,9 @@ for (const el of engine.els) {
 }
 function bindSeek(sel) {
   const r = $(sel);
-  let drag = null;
+  let drag = null, endedAt = 0, idle = null;
+  // A drag that loses its last event must never leave the bar frozen: when nothing is holding it, let go.
+  const release = () => { clearTimeout(idle); idle = null; if (!drag && seeking) { seeking = false; paintTime(); } };
   const duration = () => {
     const d = engine.el.duration;
     return Number.isFinite(d) && d > 0 ? d : 0;
@@ -2033,7 +2035,7 @@ function bindSeek(sel) {
     $('#p-dur').textContent = $('#now-dur').textContent = '-' + fmt(d - time);
   };
   const commit = () => {
-    seeking = false;
+    seeking = false; clearTimeout(idle); idle = null;
     const d = duration();
     if (d) {
       if (P.resumeId === current()?.id) P.resumeAt = 0;
@@ -2052,7 +2054,7 @@ function bindSeek(sel) {
     if (drag?.pointerId !== e.pointerId) return;
     const shouldSeek = e.type === 'pointerup' && drag.track === current()?.id &&
       drag.el === engine.el && drag.src === engine.el.getAttribute('src');
-    drag = null;
+    drag = null; endedAt = Date.now();
     r.classList.remove('dragging');
     if (shouldSeek) {
       move(e);
@@ -2063,8 +2065,16 @@ function bindSeek(sel) {
       paintTime();
     }
   };
-  r.addEventListener('input', preview);
-  r.addEventListener('change', commit);
+  // On iPhone the slider also reacts on its own to the same finger. Those extra events arrive after the drag
+  // has already been applied and used to re-freeze the bar, so they're ignored; the finger drag below is the only path.
+  const nativeEcho = () => !drag && (Date.now() - endedAt < 1000 || r.dataset.touch === '1');
+  r.addEventListener('input', () => {
+    if (nativeEcho()) { paintTime(); return; }
+    preview();
+    clearTimeout(idle); if (!drag && !r.matches(':active')) idle = setTimeout(release, 1500);
+  });
+  r.addEventListener('change', () => { if (nativeEcho()) { seeking = false; paintTime(); return; } commit(); });
+  r.addEventListener('touchstart', e => { r.dataset.touch = '1'; e.preventDefault(); }, { passive: false });
   r.addEventListener('blur', () => {
     if (!drag && seeking) { seeking = false; paintTime(); }
   });
