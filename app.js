@@ -1761,6 +1761,7 @@ function peekNext() {
   if (!more.length) return null;
   more.forEach(id => P.autoAdded.add(id)); P.queue.push(...more); savePlayer();
   if (P.panel === 'queue' && $('#now').classList.contains('open')) renderQueue();
+  if (P.panel === 'artist' && $('#now').classList.contains('open')) renderPanel();
   return { id: P.queue[P.idx + 1], idx: P.idx + 1 };
 }
 async function next(auto = false) {
@@ -1830,6 +1831,7 @@ function paintNow(t) {
   $('#p-title').textContent = t.title; $('#p-artist').textContent = t.artist;
   $('#now-title').textContent = t.title; $('#now-artist').textContent = t.artist;
   $('#now-mini-title').textContent = t.title; $('#now-mini-artist').textContent = t.artist; $('#now-mini-art').src = artOf(t);
+  if (t.ext) delete $('#now-artist').dataset.action; else $('#now-artist').dataset.action = 'artist-more';
   $('#now-artist').href = t.kind === 'episode' ? '#/show/' + t.showId : t.kind === 'ayah' ? '#/quran/' + t.surah : '#/artist/' + encodeURIComponent(mainArtist(t.artist));
   $('#now-from').textContent = P.mode === 'flow' ? 'Fof Flow' : P.context ? 'Playing from ' + P.context : '';
   ['#p-like', '#now-like'].forEach(s => $(s).classList.toggle('on', !!t.liked));
@@ -2113,6 +2115,7 @@ async function renderPanel() {
   $('#lyrics-expand').hidden = P.panel !== 'lyrics';
   if (P.panel === 'queue') { $('#lyrics-return').hidden = true; return renderQueue(); }
   const t = current(); if (!t) return;
+  if (P.panel === 'artist') { $('#lyrics-return').hidden = true; box.innerHTML = t.ext ? '<div class="am-empty">Nothing more to show for this one.</div>' : `<div class="am-panel">${artistMore(t)}</div>`; return; }
   if (t.kind === 'ayah' || t.kind === 'surahrec') {
     const cv = curVerse(), a = QR.text.get(cv.s)?.[cv.v - 1]; if (!a) qTextNow(cv.s).then(() => renderPanel()).catch(() => {});
     box.innerHTML = a ? `<div class="lyrics q-now"><p class="q-now-ar" dir="rtl" lang="ar">${esc(a.ar)}</p><p class="q-now-en">${esc(a.en)}</p><div class="lyrics-credit">Translation: Saheeh International</div></div>` : '';
@@ -2587,6 +2590,8 @@ document.addEventListener('click', async e => {
     switch (a.dataset.action) {
       case 'noop': return;
       case 'pod-play': return podPlay(id);
+      case 'artist-more': e.preventDefault(); return artistSheet();
+      case 'go-artist': { closeSheet?.(); closeNow(); return setTimeout(() => go('artist/' + encodeURIComponent(a.dataset.name)), 60); }
       case 'rp-story': return replayStory();
       case 'eq': return eqSheet();
       case 'eq-preset': return setEQ(id);
@@ -2628,11 +2633,12 @@ document.addEventListener('click', async e => {
       case 'close-now': return closeNow();
       case 'open-lyrics': return openNow('lyrics');
       case 'open-queue': return openNow('queue');
-      case 'tab-lyrics': case 'tab-queue': {
+      case 'tab-lyrics': case 'tab-queue': case 'tab-artist': {
         const p = a.dataset.action.slice(4); const n = $('#now');
         if (innerWidth <= 820 && n.classList.contains('panel-open') && P.panel === p) n.classList.remove('panel-open'); else { P.panel = p; n.classList.add('panel-open'); }
         if (p === 'queue') n.classList.remove('lyrics-full');
-        for (const k of ['lyrics', 'queue']) $('#ic-' + k).classList.toggle('on-panel', n.classList.contains('panel-open') && P.panel === k);
+        if (p !== 'lyrics') n.classList.remove('lyrics-full');
+        for (const k of ['lyrics', 'artist', 'queue']) $('#ic-' + k)?.classList.toggle('on-panel', n.classList.contains('panel-open') && P.panel === k);
         return renderPanel();
       }
       case 'dl': return downloadSongs(a.dataset.ids.split(','), '');
@@ -3330,4 +3336,29 @@ function eqSheet() {
       applyEQ(); clearTimeout(r._t); r._t = setTimeout(saveSettings, 400);
     }));
   });
+}
+
+/* =====================================================================
+   More by this artist (player button + tap the artist's name)
+   ===================================================================== */
+function artistMore(t, { sheetMode = false } = {}) {
+  const names = artistCredits(t.artist).filter(n => n && !/^unknown/i.test(n)).slice(0, sheetMode ? 1 : 3);
+  if (!names.length) return '<div class="am-empty">No artist info for this song.</div>';
+  const blocks = names.map(name => {
+    const all = groups('creditedArtist').get(name) || [];
+    const others = all.filter(x => x.id !== t.id).sort((a, b) => (b.plays || 0) - (a.plays || 0) || (b.liked - a.liked) || byAdded(a, b));
+    const shown = others.slice(0, sheetMode ? 5 : 10);
+    const key = listKey(others.map(x => x.id), name);
+    return `<section class="am-block"><div class="am-head"><img class="am-av" src="${artistImg(all, name)}" alt=""><div class="am-name"><span>More by</span><b class="ellipsis">${esc(name)}</b></div>
+        ${others.length ? `<button class="am-play" data-play-list="${key}" data-i="0" aria-label="Play all by ${esc(name)}">${icon('play')}</button>` : ''}</div>
+      ${shown.length ? `<div class="am-list">${shown.map((x, i) => `<div class="am-row${current()?.id === x.id ? ' playing' : ''}" data-play-list="${key}" data-i="${i}"><img loading="lazy" src="${artOf(x)}" alt=""><span class="am-main"><b class="ellipsis">${esc(x.title)}</b><em class="ellipsis">${esc(x.album || x.artist)}${x.plays ? ` · ${x.plays} play${x.plays === 1 ? '' : 's'}` : ''}</em></span></div>`).join('')}</div>`
+        : `<p class="am-empty">This is the only ${esc(name)} song in your library.</p>`}
+      <button class="am-link" data-action="go-artist" data-name="${esc(name)}">${others.length > shown.length ? `See all ${others.length + 1} songs from ${esc(name)}` : `Go to ${esc(name)}`}${icon('back', 'chev')}</button></section>`;
+  }).join('');
+  const rel = sheetMode ? [] : [...relatedArtists(names)].filter(a => !names.includes(a)).map(a => [a, groups('artist').get(a)]).filter(x => x[1]).slice(0, 10);
+  return blocks + (rel.length ? `<section class="am-block"><div class="am-sub">Similar artists</div><div class="am-rel">${rel.map(([a, x]) => `<button class="am-rel-item" data-action="go-artist" data-name="${esc(a)}"><img loading="lazy" src="${artistImg(x, a)}" alt=""><span class="ellipsis">${esc(a)}</span></button>`).join('')}</div></section>` : '');
+}
+function artistSheet() {
+  const t = current(); if (!t || t.ext) return;
+  sheet(`<div class="am-sheet">${artistMore(t, { sheetMode: true })}</div>`);
 }
