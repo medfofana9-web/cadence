@@ -36,6 +36,16 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const fmt = s => { if (!isFinite(s) || s < 0) s = 0; s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = String(s % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${x}` : `${m}:${x}`; };
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 const mainArtist = a => (a || '').split(/ feat\. | ft\. | featuring | & |, | x | with /i)[0].trim();
+const artistCredits = value => {
+  const credit = (value || '').replace(/\s*\((?:feat\.?|ft\.?|featuring)\s+([^()]+)\)/gi, ' & $1');
+  return [...new Set(credit.split(/\s+(?:feat\.?|ft\.?|featuring|&|x|with)\s+|,\s+/i).map(name => name.trim()).filter(Boolean))];
+};
+const genreFamilies = new Map([
+  ['Hip-Hop', ['Hip-Hop/Rap', 'Hip Hop/Rap', 'Hip-Hop', 'Hip Hop']],
+  ['R&B', ['R&B/Soul', 'R&B']],
+]);
+const genreAliases = new Map([...genreFamilies].flatMap(([name, aliases]) => aliases.map(alias => [alias.toLowerCase(), name])));
+const browseGenre = genre => genreAliases.get(genre.trim().toLowerCase()) || genre;
 const albumArtist = t => t.albumArtist && !/various/i.test(t.albumArtist) ? t.albumArtist : mainArtist(t.artist);
 const shuffleArr = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const count = n => `${n} song${n === 1 ? '' : 's'}`;
@@ -388,7 +398,7 @@ function rowHtml(t, i, key, opts) {
     ${opts.sortable ? '<div class="handle" title="Drag to reorder"><svg><use href="#i-grip"/></svg></div>' : ''}
     <div class="num"><span class="n">${i + 1}</span><span class="eq"><i></i><i></i><i></i></span><svg class="hover-icon"><use href="#i-play"/></svg></div>
     <div class="th"><img loading="lazy" decoding="async" src="${artOf(t)}" alt=""></div>
-    <div class="tmain"><div class="tt ellipsis">${esc(t.title)}${t.explicit ? '<span class="explicit">E</span>' : ''}</div><div class="ta ellipsis"><a href="#/artist/${encodeURIComponent(mainArtist(t.artist))}">${esc(t.artist)}</a></div></div>
+    <div class="tmain"><div class="tt ellipsis">${esc(t.title)}${t.explicit ? '<span class="explicit">E</span>' : ''}</div><div class="ta ellipsis">${artistCredits(t.artist).map(name => `<a href="#/artist/${encodeURIComponent(name)}">${esc(name)}</a>`).join(', ')}</div></div>
     ${opts.cols.map(c => c === 'album' ? `<div class="tc ellipsis">${t.album ? `<a href="#/album/${encodeURIComponent(t.album + '\u0001' + albumArtist(t))}">${esc(t.album)}</a>` : `<span class="dim">${esc(t.category === 'Music' ? '' : t.category)}</span>`}</div>`
       : c === 'added' ? `<div class="tc">${ago(t.addedAt)}</div>` : c === 'plays' ? `<div class="tc num-r">${t.plays || 0}</div>` : `<div class="tc">${ago(t.lastPlayed)}</div>`).join('')}
     <button class="icon-btn like-btn ${t.liked ? 'on' : ''}" data-action="like" data-id="${t.id}" aria-label="Like"><svg><use href="#i-heart"/></svg></button>
@@ -497,13 +507,24 @@ function groups(kind) {
   for (const t of visible()) {
     let k;
     if (kind === 'artist') k = mainArtist(t.artist);
+    else if (kind === 'creditedArtist') {
+      for (const name of artistCredits(t.artist)) {
+        if (!m.has(name)) m.set(name, []);
+        m.get(name).push(t);
+      }
+      continue;
+    }
     else if (kind === 'album') { if (!t.album) continue; k = `${t.album}\u0001${albumArtist(t)}`; }
-    else if (kind === 'mix') k = t.category === 'Music' ? (t.genre || 'Music') : t.category;
-    else if (kind === 'genre') { if (!t.genre) continue; k = t.genre; }
+    else if (kind === 'mix') k = browseGenre(t.category === 'Music' ? (t.genre || 'Music') : t.category);
+    else if (kind === 'genre') { if (!t.genre) continue; k = browseGenre(t.genre); }
     if (!m.has(k)) m.set(k, []);
     m.get(k).push(t);
   }
   return (gCache.map[kind] = m);
+}
+function mixTracks(name) {
+  const key = browseGenre(name);
+  return [...new Set([...(groups('mix').get(key) || []), ...(groups('genre').get(key) || [])])];
 }
 function playCounts(filter) { const c = new Map(); for (const e of S.log) if (!filter || filter(e)) c.set(e.id, (c.get(e.id) || 0) + 1); return c; }
 const isNight = e => { const h = new Date(e.at).getHours(); return h >= 22 || h < 4; };
@@ -708,10 +729,10 @@ function ctxTile(c) {
   const h = hrefFor(c); const [r, ...rest] = h.split('/'); const p = rest.join('/');
   let tracks = [], title = c.title, img;
   if (r === 'album') tracks = groups('album').get(p) || [];
-  else if (r === 'artist') { tracks = groups('artist').get(p) || []; img = artOf(tracks[0]); }
+  else if (r === 'artist') { tracks = groups('creditedArtist').get(p) || []; img = artOf(tracks[0]); }
   else if (r === 'playlist') { const pl = S.playlists.get(p); if (!pl) return ''; tracks = pl.tracks.map(id => S.tracks.get(id)).filter(Boolean); title = pl.name; img = S.plCovers.get(p); }
   else if (r === 'smart') { tracks = smartList(p); title = SMART[p]?.title; }
-  else if (r === 'mix') tracks = groups('mix').get(p) || [];
+  else if (r === 'mix') tracks = mixTracks(p);
   else if (r === 'mood') { tracks = moodList(p); title = MOODS[p]?.title; }
   else if (r === 'daily') { const m = dailyMixes()[+p - 1]; if (!m) return ''; tracks = m.tracks; title = `Daily Mix ${m.n}`; }
   else if (r === 'liked') tracks = visible().filter(t => t.liked);
@@ -726,7 +747,7 @@ VIEWS.search = () => {
     const gs = [...groups('mix')].sort((a, b) => b[1].length - a[1].length);
     return `<div class="page-head"><h1>Search</h1></div>${input}
       ${S.searches.length ? `<section class="section"><div class="section-head"><h2>Recent searches</h2><a class="see-all" data-action="clear-searches">Clear</a></div><div class="chips">${S.searches.map(s => `<button class="chip" data-search="${esc(s)}">${esc(s)}</button>`).join('')}</div></section>` : ''}
-      ${gs.length ? `<section class="section"><div class="section-head"><h2>Browse your library</h2></div><div class="genre-grid">${gs.map(([k, ts]) => { const c = colorsOf(ts); return `<div class="genre" data-href="mix/${esc(k)}" style="${ambient(c)}"><span>${esc(k)}</span><small>${count(ts.length)}</small><img loading="lazy" src="${artOf(ts.find(t => S.thumbs.has(t.id)) || ts[0])}" alt=""></div>`; }).join('')}</div></section>` : ''}`;
+      ${gs.length ? `<section class="section"><div class="section-head"><h2>Browse your library</h2></div><div class="genre-grid">${gs.map(([k, ts]) => { const c = colorsOf(ts); return `<div class="genre" data-href="mix/${esc(k)}" style="${ambient(c)}"><span>${esc(k)}</span><small>${count(mixTracks(k).length)}</small><img loading="lazy" src="${artOf(ts.find(t => S.thumbs.has(t.id)) || ts[0])}" alt=""></div>`; }).join('')}</div></section>` : ''}`;
   }
   const res = S.index.search(q, 300);
   const songs = res.filter(r => r.kind === 'song').map(r => S.tracks.get(r.key)).filter(Boolean).filter(t => !(S.settings.hideExplicit && t.explicit));
@@ -739,13 +760,13 @@ VIEWS.search = () => {
   const songKey = listKey(songs.map(t => t.id), 'Search');
   let topHtml = '';
   if (top.kind === 'song') { const t = S.tracks.get(top.key); topHtml = `<div class="top-result sr-item" data-play-list="${songKey}" data-i="0" style="${ambient(t.colors)}"><img src="${artOf(t)}" alt=""><div><div class="eyebrow">Song</div><h2 class="ellipsis">${esc(t.title)}</h2><div class="muted ellipsis">${esc(t.artist)}</div></div><span class="hover-play show"><svg><use href="#i-play"/></svg></span></div>`; }
-  else { const ts = top.kind === 'artist' ? groups('artist').get(top.key) : top.kind === 'album' ? groups('album').get(top.key) : top.kind === 'genre' ? groups('genre').get(top.key) : S.playlists.get(top.key)?.tracks.map(id => S.tracks.get(id)).filter(Boolean);
+  else { const ts = top.kind === 'artist' ? groups('creditedArtist').get(top.key) : top.kind === 'album' ? groups('album').get(top.key) : top.kind === 'genre' ? mixTracks(top.key) : S.playlists.get(top.key)?.tracks.map(id => S.tracks.get(id)).filter(Boolean);
     const href = top.kind === 'playlist' ? 'playlist/' + top.key : top.kind === 'genre' ? 'mix/' + top.key : top.kind + '/' + top.key;
     topHtml = `<div class="top-result sr-item" data-href="${esc(href)}" style="${ambient(colorsOf(ts || []))}"><div class="${top.kind === 'artist' ? 'round' : ''} tr-art">${collageHtml(ts || [])}</div><div><div class="eyebrow">${{ artist: 'Artist', album: 'Album', playlist: 'Playlist', genre: 'Genre' }[top.kind]}</div><h2 class="ellipsis">${esc(top.primary)}</h2><div class="muted">${count((ts || []).length)}</div></div></div>`; }
   return `<div class="page-head"><h1>Search</h1></div>${input}
     <div class="search-top"><section><div class="section-head"><h2>Top result</h2></div>${topHtml}</section>
     ${songs.length ? `<section><div class="section-head"><h2>Songs</h2></div>${trackRows(songs.slice(0, 5), { key: songKey, context: 'Search', header: false, cols: [] })}</section>` : ''}</div>
-    ${artists.length ? shelf('Artists', artists.map(r => { const ts = groups('artist').get(r.key) || []; return collCard({ href: 'artist/' + r.key, title: r.key, sub: 'Artist', tracks: ts, round: true, img: artOf(ts[0]) }); }).join('')) : ''}
+    ${artists.length ? shelf('Artists', artists.map(r => { const ts = groups('creditedArtist').get(r.key) || []; return collCard({ href: 'artist/' + r.key, title: r.key, sub: count(ts.length), tracks: ts, round: true, img: artOf(ts[0]) }); }).join('')) : ''}
     ${albums.length ? shelf('Albums', albums.map(r => { const ts = groups('album').get(r.key) || []; const [al, ar] = r.key.split('\u0001'); return collCard({ href: 'album/' + r.key, title: al, sub: ar, tracks: ts }); }).join('')) : ''}
     ${pls.length ? shelf('Playlists', pls.map(r => { const p = S.playlists.get(r.key); return p ? collCard({ href: 'playlist/' + p.id, title: p.name, sub: count(p.tracks.length), tracks: p.tracks.map(id => S.tracks.get(id)).filter(Boolean), img: S.plCovers.get(p.id) }) : ''; }).join('')) : ''}
     ${genres.length ? `<section class="section"><div class="section-head"><h2>Genres</h2></div><div class="chips">${genres.map(r => `<button class="chip" data-href="mix/${esc(r.key)}">${esc(r.key)}</button>`).join('')}</div></section>` : ''}
@@ -754,10 +775,10 @@ VIEWS.search = () => {
 function rebuildIndex() {
   const e = [];
   for (const t of S.tracks.values()) e.push({ kind: 'song', key: t.id, text: `${t.title} ${t.artist} ${t.album || ''} ${t.genre || ''}`, primary: t.title, weight: 1.2 + Math.min(t.plays || 0, 20) * .1 + (t.liked ? 1 : 0) });
-  for (const [a, ts] of groups('artist')) e.push({ kind: 'artist', key: a, text: a, primary: a, weight: 2 + Math.min(ts.length, 10) * .1 });
+  for (const [a, ts] of groups('creditedArtist')) e.push({ kind: 'artist', key: a, text: a, primary: a, weight: 2 + Math.min(ts.length, 10) * .1 });
   for (const [k] of groups('album')) { const [al, ar] = k.split('\u0001'); e.push({ kind: 'album', key: k, text: `${al} ${ar}`, primary: al, weight: 1 }); }
   for (const p of S.playlists.values()) e.push({ kind: 'playlist', key: p.id, text: p.name, primary: p.name, weight: 1.5 });
-  for (const [g] of groups('genre')) e.push({ kind: 'genre', key: g, text: g, primary: g, weight: .5 });
+  for (const [g] of groups('genre')) e.push({ kind: 'genre', key: g, text: [g, ...(genreFamilies.get(g) || [])].join(' '), primary: g, weight: .5 });
   S.index.build(e); S.indexDirty = false;
 }
 
@@ -785,24 +806,22 @@ VIEWS.songs = () => {
 };
 const artistImg = ts => artOf(ts.find(t => S.thumbs.has(t.id) || S.art.has(t.id)) || ts[0]);
 VIEWS.artists = () => {
-  const g = [...groups('artist')].sort((a, b) => a[0].localeCompare(b[0]));
+  const g = [...groups('creditedArtist')].sort((a, b) => a[0].localeCompare(b[0]));
   if (!g.length) return `<div class="page-head"><h1>Artists</h1></div>${emptyLib()}`;
   return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Artists</h1></div><span class="muted">${g.length}</span></div><div class="grid">${g.map(([a, ts]) => collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artistImg(ts) })).join('')}</div>`;
 };
 VIEWS.artist = () => {
-  const name = S.param; const ts = groups('artist').get(name) || [];
+  const name = S.param; const ts = groups('creditedArtist').get(name) || [];
   if (!ts.length) return `${back()}<div class="empty-state small"><h2>Artist not found</h2></div>`;
   const popular = [...ts].sort((a, b) => (b.plays || 0) - (a.plays || 0) || (b.liked - a.liked) || byAdded(a, b));
   const albums = [...groups('album')].filter(([k, a]) => k.split('\u0001')[1] === name || a.some(t => mainArtist(t.artist) === name));
   const rel = [...relatedArtists([name])].map(a => [a, groups('artist').get(a)]).filter(x => x[1]).slice(0, 12);
-  const appears = visible().filter(t => mainArtist(t.artist) !== name && t.artist.includes(name));
   const listened = ts.reduce((a, t) => a + (t.plays || 0), 0);
   return `${back()}${collHead({ img: artistImg(ts), tracks: popular, eyebrow: 'Artist', title: name, meta: `${count(ts.length)}${albums.length ? ` · ${albums.length} album${albums.length > 1 ? 's' : ''}` : ''}${listened ? ` · ${listened} play${listened > 1 ? 's' : ''}` : ''}`, round: true, ctxRoute: 'artist/' + name,
-    actions: `<button class="btn ghost" data-action="radio-artist" data-name="${esc(name)}"><svg><use href="#i-radio"/></svg>Artist radio</button>${dlButton(ts)}<button class="btn ghost" data-action="artist-genre" data-name="${esc(name)}">${esc(ts.find(t => t.genre)?.genre || 'Set genre')}</button>` })}
+    actions: `<button class="btn ghost" data-action="radio-artist" data-name="${esc(name)}"><svg><use href="#i-radio"/></svg>Artist radio</button>${dlButton(ts)}${groups('artist').has(name) ? `<button class="btn ghost" data-action="artist-genre" data-name="${esc(name)}">${esc(ts.find(t => t.genre)?.genre || 'Set genre')}</button>` : ''}` })}
     <section class="section"><div class="section-head"><h2>${listened ? 'Popular in your library' : 'Songs'}</h2></div>${trackRows(popular.slice(0, ts.length > 8 ? 5 : 8), { context: name, header: false, cols: ['album'] })}</section>
     ${albums.length ? shelf('Albums', albums.map(([k, a]) => collCard({ href: 'album/' + k, title: k.split('\u0001')[0], sub: a[0].year || count(a.length), tracks: a })).join('')) : ''}
     ${ts.length > 8 ? `<section class="section"><div class="section-head"><h2>All songs</h2></div>${trackRows(sorted(ts, 'title', 1), { context: name, cols: ['album', 'plays'] })}</section>` : ''}
-    ${appears.length ? shelf('Featured on', appears.map((t, i) => trackCard(t, listKey(appears.map(x => x.id), name), i)).join('')) : ''}
     ${rel.length ? shelf('Similar artists in your library', rel.map(([a, x]) => collCard({ href: 'artist/' + a, title: a, sub: 'Artist', tracks: x, round: true, img: artistImg(x) })).join(''), { sub: 'Same genres or the same playlists' }) : ''}`;
 };
 VIEWS.albums = () => {
@@ -849,7 +868,7 @@ VIEWS.smart = () => {
     ${ts.length ? trackRows(ts, { context: d.title, cols: ['album', S.param === 'recently-added' ? 'added' : S.param === 'never-played' ? 'added' : 'plays', 'last'] }) : '<div class="empty-state small"><p>Nothing here yet. This fills in as you listen.</p></div>'}`;
 };
 VIEWS.mix = () => {
-  const k = S.param; const ts = groups('mix').get(k) || groups('genre').get(k) || [];
+  const k = browseGenre(S.param); const ts = mixTracks(k);
   return `${back()}${collHead({ img: null, tracks: ts, eyebrow: 'Mix', title: mixName(k), ctxRoute: 'mix/' + k, meta: `Every ${esc(k)} song in your library · ${count(ts.length)} · ${total(ts)}` })}${trackRows(sorted(ts, 'plays', -1), { context: mixName(k), cols: ['album', 'plays'] })}`;
 };
 VIEWS.mood = () => {
@@ -862,7 +881,7 @@ VIEWS.library = () => {
   const row = (href, icon, label, n) => `<a class="lib-row" href="#/${href}"><svg><use href="#i-${icon}"/></svg><span>${label}</span><span class="muted">${n ?? ''}</span><svg class="chev"><use href="#i-back"/></svg></a>`;
   const smarts = Object.entries(SMART).map(([k, d]) => [k, d, d.get(visible())]).filter(x => x[2].length);
   return `<div class="page-head"><h1>Library</h1><a class="icon-btn" href="#/settings" aria-label="Settings"><svg><use href="#i-gear"/></svg></a></div>
-    <div class="lib-rows">${row('songs', 'note', 'Songs', visible().length)}${row('artists', 'mic', 'Artists', groups('artist').size)}${row('albums', 'album', 'Albums', groups('album').size)}${row('liked', 'heart', 'Liked Songs', visible().filter(t => t.liked).length)}${S.log.length ? row('insights', 'chart', 'Your listening', '') : ''}${reviewList().length ? row('review', 'check', 'Check these', reviewList().length) : ''}</div>
+    <div class="lib-rows">${row('songs', 'note', 'Songs', visible().length)}${row('artists', 'mic', 'Artists', groups('creditedArtist').size)}${row('albums', 'album', 'Albums', groups('album').size)}${row('liked', 'heart', 'Liked Songs', visible().filter(t => t.liked).length)}${S.log.length ? row('insights', 'chart', 'Your listening', '') : ''}${reviewList().length ? row('review', 'check', 'Check these', reviewList().length) : ''}</div>
     <section class="section"><div class="section-head"><h2>Playlists</h2><div class="row-actions"><a class="see-all" data-action="pick-playlists">Import from Apple Music</a><a class="see-all" data-action="new-playlist">New playlist</a></div></div>
     ${pls.length ? `<div class="grid">${pls.map(p => collCard({ href: 'playlist/' + p.id, title: p.name, sub: count(p.tracks.length), tracks: p.tracks.map(id => S.tracks.get(id)).filter(Boolean), img: S.plCovers.get(p.id) })).join('')}</div>` : '<p class="muted">No playlists yet.</p>'}</section>
     ${smarts.length ? `<section class="section"><div class="section-head"><h2>Smart playlists</h2></div><div class="grid">${smarts.map(([k, d, ts]) => collCard({ href: 'smart/' + k, title: d.title, sub: count(ts.length), tracks: ts, badge: '<svg><use href="#i-spark"/></svg>' })).join('')}</div></section>` : ''}`;
@@ -2283,7 +2302,7 @@ document.addEventListener('click', async e => {
       case 'sleep': return sleepMenu(e);
       case 'radio': return radio(id);
       case 'flow': return flow();
-      case 'radio-artist': { const ts = groups('artist').get(a.dataset.name) || []; if (!ts.length) return; P.shuffle = false; const seed = ts[Math.floor(Math.random() * ts.length)]; playList([...shuffleArr(ts.map(t => t.id)).slice(0, 6), ...similar(ts, 20, new Set(ts.map(t => t.id)))], 0, { context: `${a.dataset.name} Radio`, mode: 'radio', seed: seed.id }); return toast(`${a.dataset.name} Radio · from your library`); }
+      case 'radio-artist': { const ts = groups('creditedArtist').get(a.dataset.name) || []; if (!ts.length) return; P.shuffle = false; const seed = ts[Math.floor(Math.random() * ts.length)]; playList([...shuffleArr(ts.map(t => t.id)).slice(0, 6), ...similar(ts, 20, new Set(ts.map(t => t.id)))], 0, { context: `${a.dataset.name} Radio`, mode: 'radio', seed: seed.id }); return toast(`${a.dataset.name} Radio · from your library`); }
       case 'play-one': return playList([id], 0, { context: 'Duplicates' });
       case 'new-playlist': return newPlaylist();
       case 'playlist-menu': return playlistMenu(e, a.dataset.pl);
