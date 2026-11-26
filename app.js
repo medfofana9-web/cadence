@@ -197,12 +197,15 @@ async function boot() {
   engine.setVolume(S.settings.volume ?? 1);
   $('#p-vol').value = Math.round((S.settings.volume ?? 1) * 100); paintRange($('#p-vol'));
   const saved = await kv.get('player', null);
+  // the spot is also kept in quick storage, which survives the app being swiped away mid-save
+  try { const q = JSON.parse(localStorage.getItem('fof-spot') || 'null'); if (saved && q && saved.queue?.[saved.idx] === q.id && q.time > (saved.time || 0)) saved.time = q.time; } catch {}
   if (saved?.queue?.length) {
     P.queue = saved.queue.filter(id => S.tracks.has(id));
     P.idx = Math.min(Math.max(saved.idx, 0), P.queue.length - 1);
     Object.assign(P, { shuffle: !!saved.shuffle, repeat: saved.repeat || 'off', context: saved.context || '', contextRoute: saved.contextRoute || '', mode: saved.mode || null, seed: saved.seed || null });
     P.played = (saved.played || []).filter(id => S.tracks.has(id));
-    if (P.idx >= 0 && P.queue.length) { const ok = await loadTrack(P.queue[P.idx], { autoplay: false, quiet: true }); if (ok && saved.time) { P.resumeAt = saved.time; seekWhenReady(saved.time); } }
+    // remember the spot even if the song can't load yet (on the phone, songs wait for sign-in to finish)
+    if (P.idx >= 0 && P.queue.length) { P.resumeId = P.queue[P.idx]; P.resumeAt = saved.time || 0; const ok = await loadTrack(P.queue[P.idx], { autoplay: false, quiet: true }); if (ok && saved.time) seekWhenReady(saved.time); }
   }
   if (/iP(hone|ad|od)/.test(navigator.userAgent) && !navigator.standalone && !IN_APP) { document.documentElement.classList.add('ios-browser'); try { if (!localStorage.getItem('cadence-a2hs')) { localStorage.setItem('cadence-a2hs', '1'); setTimeout(() => toast('For full screen: tap Share, then Add to Home Screen'), 2500); } } catch {} }
   renderSidebar();
@@ -687,11 +690,11 @@ function hrefFor(ctx) { return ctx.route.replace(/^#\/?/, ''); }
 
 VIEWS.home = () => {
   const all = visible();
-  if (!all.length) return `<div class="page-head"><div><h1>${greeting()}</h1><div class="lede">Your soundtrack starts here.</div></div></div>${emptyLib()}`;
+  if (!all.length) return `<div class="page-head"><div><h1>Home</h1></div></div>${emptyLib()}`;
   const cur = current();
   const recent = SMART['recently-played'].get();
   const hero = cur || recent[0] || [...all].sort(byAdded)[0];
-  const resumeAt = cur && engine.el.currentTime > 5 && engine.el.paused ? engine.el.currentTime : 0;
+  const resumeAt = cur && engine.el.paused ? (spotNow() > 5 ? spotNow() : 0) : 0;
   const heroKey = listKey([hero.id], 'Home');
   // recent places first, then fill with mixes and your own lists so the grid never looks empty
   const seenR = new Set(); const pad = [...dailyMixes().slice(0, 4).map((m, i) => ({ route: '#/daily/' + (i + 1), title: 'Daily Mix' })), { route: '#/liked', title: 'Liked Songs' }, ...Object.entries(SMART).filter(([k]) => k !== 'recently-played').map(([k, d]) => ({ route: '#/smart/' + k, title: d.title }))];
@@ -712,11 +715,11 @@ VIEWS.home = () => {
   const discoverKey = listKey(discover.map(t => t.id), 'Discover');
   const moods = Object.entries(MOODS).map(([k, m]) => [k, m, moodList(k).length]).filter(x => x[2]);
   return `
-  <div class="page-head home-head"><div><div class="eyebrow">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div><h1>${greeting()}</h1><div class="lede">${cur ? 'Pick up right where you left off.' : 'Your soundtrack starts here.'}</div></div>
+  <div class="page-head home-head"><div><h1>Home</h1></div>
     <button class="btn flow-btn" data-action="flow"><svg><use href="#i-flow"/></svg>Fof Flow</button></div>
   <section class="hero ${cur ? 'live' : ''}" style="${richAmbient(hero.colors)}">
     <div class="hero-art" data-play-list="${heroKey}" data-i="0"><img src="${artOf(hero, 'full')}" alt=""></div>
-    <div class="hero-info"><div class="eyebrow">${cur ? '<span class="when-playing">Now playing</span><span class="when-paused">Paused · pick up where you left off</span>' : recent.length ? 'Last played' : 'Newest in your library'}</div>
+    <div class="hero-info"><div class="eyebrow">${cur ? '<span class="when-playing">Now Playing</span><span class="when-paused">Paused</span>' : recent.length ? 'Recently Played' : 'Recently Added'}</div>
       <h1 class="ellipsis">${cur ? '<span class="eq hero-eq"><i></i><i></i><i></i></span>' : ''}${esc(hero.title)}</h1><div class="sub ellipsis">${esc(hero.artist)}${hero.album ? ' · ' + esc(hero.album) : ''}</div>
       ${cur ? '<div class="hero-progress"><i id="hero-bar"></i></div>' : ''}
       <div class="row-actions">${cur ? `<button class="btn primary" data-action="toggle"><span class="when-playing"><svg><use href="#i-pause"/></svg>Pause</span><span class="when-paused"><svg><use href="#i-play"/></svg>${resumeAt ? `Resume at ${fmt(resumeAt)}` : 'Resume'}</span></button>` : `<button class="btn primary" data-play-list="${heroKey}" data-i="0"><svg><use href="#i-play"/></svg>Play</button>`}
@@ -724,19 +727,19 @@ VIEWS.home = () => {
   </section>
   ${(() => { const n = reviewList().length; return n ? `<a class="check-banner" href="#/review"><div class="cb-stack">${reviewList().slice(0, 3).map(t => `<img src="${artOf(t)}" alt="">`).join('')}</div><div><b>${count(n)} to check</b><span>Quick look at names Fof Music wasn’t sure about</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''; })()}
   ${ctxTiles.length ? `<section class="section"><div class="section-head"><h2>Jump back in</h2></div><div class="tiles">${ctxTiles.join('')}</div></section>` : ''}
-  ${dailies.length ? shelf('Your daily mixes', dailies.map(mixCard).join(''), { sub: 'Your artists, grouped by sound · reshuffled every day' }) : ''}
-  ${recent.length ? shelf('Recently played', recent.slice(0, 16).map((t, i) => trackCard(t, recentKey, i)).join(''), { more: 'smart/recently-played' }) : ''}
-  ${shelf('Made for you', [
+  ${dailies.length ? shelf('Daily Mixes', dailies.map(mixCard).join('')) : ''}
+  ${recent.length ? shelf('Recently Played', recent.slice(0, 16).map((t, i) => trackCard(t, recentKey, i)).join(''), { more: 'smart/recently-played' }) : ''}
+  ${shelf('Made for You', [
     ...smartCards.map(([k, d, ts]) => collCard({ href: 'smart/' + k, title: d.title, sub: d.desc, tracks: ts, badge: '<svg><use href="#i-spark"/></svg>' })),
     ...mixes.map(([k, ts]) => collCard({ href: 'mix/' + k, title: mixName(k), sub: count(ts.length), tracks: ts })),
     liked.length ? collCard({ href: 'liked', title: 'Liked Songs', sub: count(liked.length), tracks: liked }) : '',
-  ].join(''), { sub: 'Built from your own library and listening' })}
-  ${moods.length ? `<section class="section"><div class="section-head"><div><h2>Moods</h2><div class="section-sub">Sessions from songs in your library</div></div></div><div class="chips mood-chips">${moods.map(([k, m, n]) => `<button class="chip mood" data-href="mood/${k}">${esc(m.title)}<span>${n}</span></button>`).join('')}</div></section>` : ''}
-  ${because.map(([a, ts]) => { const k = listKey(ts.map(t => t.id), 'Because you played ' + a); return shelf(`Because you played ${a}`, ts.map((t, i) => trackCard(t, k, i)).join(''), { sub: 'Similar songs already in your library' }); }).join('')}
-  ${discover.length >= 3 ? shelf('Discover in your library', discover.map((t, i) => trackCard(t, discoverKey, i)).join(''), { sub: 'Songs you rarely play that match what you’ve been listening to' }) : ''}
-  ${shelf('Recently added', added.map((t, i) => trackCard(t, addedKey, i)).join(''), { more: 'songs' })}
-  ${favArtists.length ? shelf(hasTaste ? 'Favorite artists' : 'Artists', favArtists.map(([a]) => { const ts = groups('artist').get(a) || []; return collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artOf(ts.find(t => S.thumbs.has(t.id) || S.art.has(t.id)) || ts[0]) }); }).join(''), { more: 'artists' }) : ''}
-  ${S.log.length >= 5 ? `<a class="insights-link" href="#/insights"><svg><use href="#i-chart"/></svg><div><b>Your listening</b><span>${hours(S.log.reduce((a, e) => a + (e.s || 0), 0))} so far · see your top songs and artists</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''}`;
+  ].join(''))}
+  ${moods.length ? `<section class="section"><div class="section-head"><div><h2>Moods</h2></div></div><div class="chips mood-chips">${moods.map(([k, m, n]) => `<button class="chip mood" data-href="mood/${k}">${esc(m.title)}<span>${n}</span></button>`).join('')}</div></section>` : ''}
+  ${because.map(([a, ts]) => { const k = listKey(ts.map(t => t.id), 'Because you played ' + a); return shelf(`More Like ${a}`, ts.map((t, i) => trackCard(t, k, i)).join('')); }).join('')}
+  ${discover.length >= 3 ? shelf('Rediscover', discover.map((t, i) => trackCard(t, discoverKey, i)).join('')) : ''}
+  ${shelf('Recently Added', added.map((t, i) => trackCard(t, addedKey, i)).join(''), { more: 'songs' })}
+  ${favArtists.length ? shelf(hasTaste ? 'Favorite Artists' : 'Artists', favArtists.map(([a]) => { const ts = groups('artist').get(a) || []; return collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artOf(ts.find(t => S.thumbs.has(t.id) || S.art.has(t.id)) || ts[0]) }); }).join(''), { more: 'artists' }) : ''}
+  ${S.log.length >= 5 ? `<a class="insights-link" href="#/insights"><svg><use href="#i-chart"/></svg><div><b>Replay</b><span>${hours(S.log.reduce((a, e) => a + (e.s || 0), 0))} listened</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''}`;
 };
 function ctxTile(c) {
   const h = hrefFor(c); const [r, ...rest] = h.split('/'); const p = rest.join('/');
@@ -913,7 +916,7 @@ VIEWS.artist = () => {
     <section class="section"><div class="section-head"><h2>${listened ? 'Popular in your library' : 'Songs'}</h2></div>${trackRows(popular.slice(0, ts.length > 8 ? 5 : 8), { context: name, header: false, cols: ['album'] })}</section>
     ${albums.length ? shelf('Albums', albums.map(([k, a]) => collCard({ href: 'album/' + k, title: k.split('\u0001')[0], sub: a[0].year || count(a.length), tracks: a })).join('')) : ''}
     ${ts.length > 8 ? `<section class="section"><div class="section-head"><h2>All songs</h2></div>${trackRows(sorted(ts, 'title', 1), { context: name, cols: ['album', 'plays'] })}</section>` : ''}
-    ${rel.length ? shelf('Similar artists in your library', rel.map(([a, x]) => collCard({ href: 'artist/' + a, title: a, sub: 'Artist', tracks: x, round: true, img: artistImg(x) })).join(''), { sub: 'Same genres or the same playlists' }) : ''}`;
+    ${rel.length ? shelf('Similar Artists', rel.map(([a, x]) => collCard({ href: 'artist/' + a, title: a, sub: 'Artist', tracks: x, round: true, img: artistImg(x) })).join('')) : ''}`;
 };
 VIEWS.albums = () => {
   const g = [...groups('album')].sort((a, b) => a[0].localeCompare(b[0]));
@@ -1015,7 +1018,7 @@ VIEWS.insights = () => {
         ${topGenres.length ? `<div class="section-head" style="margin-top:22px"><h2>Genres</h2></div><div class="chips">${topGenres.map(([g, s]) => `<button class="chip" data-href="mix/${esc(g)}">${esc(g)} <span>${hours(s)}</span></button>`).join('')}</div>` : ''}</section>
       <section class="panel"><div class="section-head"><h2>Last 6 months</h2></div><div class="months">${months.map(([l, s]) => `<div class="mcol"><div class="mbar"><i style="height:${s / maxM * 100}%"></i></div><span>${l}</span><small>${s ? hours(s) : ''}</small></div>`).join('')}</div></section>
     </div>
-    ${discovered.length ? shelf('Recently discovered', discovered.map((t, i) => trackCard(t, listKey(discovered.map(x => x.id), 'Recently discovered'), i)).join(''), { sub: 'First played in the last 30 days' }) : ''}`;
+    ${discovered.length ? shelf('New to You', discovered.map((t, i) => trackCard(t, listKey(discovered.map(x => x.id), 'Recently discovered'), i)).join(''), {}) : ''}`;
 };
 
 /* =====================================================================
@@ -1132,15 +1135,15 @@ VIEWS.import = () => {
   const signedOut = cloud.cloudConfigured() && !S.user;
   const st = IMP;
   const failed = st.jobs.filter(j => j.state === 'error');
-  return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Add music</h1><div class="lede">MP3, M4A, AAC, FLAC and WAV. Songs already in your library are skipped.</div></div></div>
+  return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Add music</h1><div class="lede">MP3, M4A, AAC, FLAC or WAV</div></div></div>
     <div class="drop" id="drop">
       <div class="drop-icon"><svg><use href="#i-upload"/></svg></div>
-      <div class="drop-text"><h2>${IS_IOS ? 'Add songs from Files' : 'Drop a folder or songs here'}</h2><p>${IS_IOS ? 'Pick songs saved in the Files app. Your full library is easiest to add from your computer, then sign in here to play it.' : 'Your Mac keeps songs in Music → Media → Music. Choose that folder to bring in everything.'}</p></div>
+      <div class="drop-text"><h2>${IS_IOS ? 'Add songs from Files' : 'Drop a folder or songs here'}</h2><p>${IS_IOS ? 'Choose songs from Files.' : 'Drop songs or a folder here.'}</p></div>
       <div class="row-actions">${IS_IOS ? '' : '<button class="btn primary" data-action="pick-folder"><svg><use href="#i-album"/></svg>Choose folder</button>'}<button class="btn ${IS_IOS ? 'primary' : ''}" data-action="pick-files"><svg><use href="#i-note"/></svg>Choose songs</button></div>
     </div>
-    ${CAN_WATCH ? `<div class="folder-card">${S.folder ? `<div class="fc-icon on"><svg><use href="#i-check"/></svg></div><div class="fc-text"><b>Watching “${esc(S.folder.name)}”</b><span>New songs you save there are added automatically within a couple of minutes while Fof Music is open.${S.lastScan ? ' Last checked ' + new Date(S.lastScan).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) + '.' : ''}</span></div><button class="btn small" data-action="scan-folder">Check now</button><button class="btn small ghost" data-action="disconnect-folder">Stop</button>`
-      : `<div class="fc-icon"><svg><use href="#i-flow"/></svg></div><div class="fc-text"><b>Add new songs automatically</b><span>Connect the folder your downloads go to (usually Downloads). Every new song you save there shows up in Fof Music on its own.</span></div><button class="btn small primary" data-action="connect-folder">Connect folder</button>`}</div>` : ''}
-    <div class="folder-card"><div class="fc-icon"><svg><use href="#i-note"/></svg></div><div class="fc-text"><b>Bring your Apple Music playlists</b><span>In the Music app: click a playlist → File → Library → Export Playlist… → save as Unicode Text. Then choose those files here.</span></div><button class="btn small" data-action="pick-playlists">Choose playlist files</button></div>
+    ${CAN_WATCH ? `<div class="folder-card">${S.folder ? `<div class="fc-icon on"><svg><use href="#i-check"/></svg></div><div class="fc-text"><b>Watching “${esc(S.folder.name)}”</b><span>${S.lastScan ? 'Checked ' + new Date(S.lastScan).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : 'New songs are added automatically'}</span></div><button class="btn small" data-action="scan-folder">Check now</button><button class="btn small ghost" data-action="disconnect-folder">Stop</button>`
+      : `<div class="fc-icon"><svg><use href="#i-flow"/></svg></div><div class="fc-text"><b>Watch a folder</b><span>New songs saved there are added automatically</span></div><button class="btn small primary" data-action="connect-folder">Connect folder</button>`}</div>` : ''}
+    <div class="folder-card"><div class="fc-icon"><svg><use href="#i-note"/></svg></div><div class="fc-text"><b>Apple Music playlists</b><span>In Music: File › Library › Export Playlist, then choose the file here</span></div><button class="btn small" data-action="pick-playlists">Choose playlist files</button></div>
     ${signedOut ? `<p class="note">You’re not signed in, so new songs stay on this device. <a href="#/settings/account">Sign in</a> to play them on your other devices too.</p>` : S.user ? `<p class="note"><svg><use href="#i-cloud"/></svg>New songs upload to your cloud library so your other devices can play them.</p>` : `<p class="note">Songs are saved in this browser on this device.</p>`}
     ${st.jobs.length ? `<div class="imp-stats" id="imp-stats">${impStats()}</div>
     <div class="imp-actions">${st.running ? '<button class="btn small ghost" data-action="imp-cancel">Cancel</button>' : ''}${!st.running && failed.length ? `<button class="btn small" data-action="imp-retry">Retry ${failed.length} failed</button>` : ''}${!st.running && st.maybeDup ? '<a class="btn small ghost" href="#/duplicates">Review possible duplicates</a>' : ''}${!st.running ? '<button class="btn small ghost" data-action="imp-clear">Clear list</button>' : ''}</div>
@@ -1625,7 +1628,7 @@ async function loadTrack(id, { autoplay = true, quiet = false } = {}) {
     if (!quiet) toast(!t.local && t.cloud && !S.user ? 'Sign in to play songs from your cloud library' : !navigator.onLine && t.cloud ? 'You’re offline and this song isn’t saved on this device' : t.cloud && cloud.lastFileError ? `Couldn’t reach your music (${cloud.lastFileError}). Try again in a moment.` : 'This song isn’t available on this device');
     return false;
   }
-  P.preloadFor = null; P.fadeStarted = false; P.counted = false; P.lyrics = null; P.lyricLine = -1; P.follow = true; P.resumeAt = 0;
+  P.preloadFor = null; P.fadeStarted = false; P.counted = false; P.lyrics = null; P.lyricLine = -1; P.follow = true; if (P.resumeId !== id) { P.resumeAt = 0; P.resumeId = null; }
   paintNow(t);
   try { await engine.load(src, { gainDb: gainFor(t), autoplay }); }
   catch (e) { if (e.name === 'NotAllowedError') { updatePlayIcons(); } else if (e.name !== 'AbortError') console.warn(e); }
@@ -1715,9 +1718,12 @@ function addHistory(id) {
   kv.set('history', S.history);
 }
 let saveT;
+/** Where you are in the current song, including a spot that hasn't been applied yet. */
+function spotNow() { const c = engine.el.currentTime || 0; return c > 0.5 ? c : (P.resumeId && P.resumeId === current()?.id ? P.resumeAt || 0 : c); }
 function savePlayer(now) {
   clearTimeout(saveT);
-  const w = () => kv.set('player', { queue: P.queue, idx: P.idx, shuffle: P.shuffle, repeat: P.repeat, context: P.context, contextRoute: P.contextRoute, mode: P.mode, seed: P.seed, played: P.played.slice(-100), time: engine.el.currentTime || 0 });
+  const w = () => kv.set('player', { queue: P.queue, idx: P.idx, shuffle: P.shuffle, repeat: P.repeat, context: P.context, contextRoute: P.contextRoute, mode: P.mode, seed: P.seed, played: P.played.slice(-100), time: spotNow() });
+  try { const t = current(); if (t) localStorage.setItem('fof-spot', JSON.stringify({ id: t.id, time: spotNow() })); } catch {}
   if (now) return w();
   saveT = setTimeout(w, 500);
 }
@@ -1825,7 +1831,7 @@ for (const el of engine.els) {
   el.addEventListener('loadedmetadata', mine(() => { const t = current(); if (t && isFinite(el.duration) && (!t.duration || Math.abs(t.duration - el.duration) > 2)) { t.duration = el.duration; saveTrack(t, { sync: false }); } onTime(); }));
   el.addEventListener('play', mine(() => { P.tick = 0; updatePlayIcons(); }));
   // iPhone ignores a jump made before a song starts loading; make it once playback begins
-  el.addEventListener('playing', mine(() => { if (P.resumeAt) { const at = P.resumeAt; P.resumeAt = 0; if (Math.abs(el.currentTime - at) > 2 && (!el.duration || at < el.duration - 1)) el.currentTime = at; } }));
+  el.addEventListener('playing', mine(() => { if (P.resumeAt && current()?.id === P.resumeId) { const at = P.resumeAt; P.resumeAt = 0; P.resumeId = null; if (Math.abs(el.currentTime - at) > 2 && (!el.duration || at < el.duration - 1)) el.currentTime = at; } }));
   el.addEventListener('pause', mine(() => { P.tick = 0; updatePlayIcons(); savePlayer(); }));
   el.addEventListener('waiting', mine(() => $('#player').classList.add('buffering')));
   el.addEventListener('playing', mine(() => $('#player').classList.remove('buffering')));
@@ -1862,7 +1868,7 @@ for (const el of engine.els) {
 function bindSeek(sel) {
   const r = $(sel);
   r.addEventListener('input', () => { seeking = true; paintRange(r); const d = engine.el.duration || 0; $('#p-cur').textContent = $('#now-cur').textContent = fmt(r.value / 1000 * d); });
-  r.addEventListener('change', () => { const d = engine.el.duration || 0; engine.el.currentTime = r.value / 1000 * d; seeking = false; if (P.lyrics?.lines) syncLyrics(engine.el.currentTime, true); });
+  r.addEventListener('change', () => { const d = engine.el.duration || 0; engine.el.currentTime = r.value / 1000 * d; seeking = false; if (P.resumeId === current()?.id) P.resumeAt = 0; setTimeout(() => savePlayer(true), 300); if (P.lyrics?.lines) syncLyrics(engine.el.currentTime, true); });
 }
 bindSeek('#p-seek'); bindSeek('#now-seek');
 function dragSeek(sel) {
