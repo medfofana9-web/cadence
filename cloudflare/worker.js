@@ -98,18 +98,24 @@ export default {
     if (req.method === 'GET' || req.method === 'HEAD') {
       const exp = +url.searchParams.get('exp'), sig = url.searchParams.get('sig') || '';
       if (!exp || exp < Date.now() / 1000 || sig !== await hmac(env.SIGNING_SECRET, path + '|' + exp)) return json({ error: 'link expired' }, 403);
-      const obj = await env.BUCKET.get(path, { range: req.headers, onlyIf: req.headers });
+      // Range handled here (not passed through) so every player gets exact byte numbers; iPhone's player is strict.
+      const m = /^bytes=(\d*)-(\d*)$/.exec((req.headers.get('range') || '').trim());
+      let range = null;
+      if (m && (m[1] || m[2])) range = m[1] === '' ? { suffix: +m[2] } : m[2] ? { offset: +m[1], length: +m[2] - +m[1] + 1 } : { offset: +m[1] };
+      const obj = await env.BUCKET.get(path, range ? { range } : {});
       if (!obj) return json({ error: 'not found' }, 404);
       const h = new Headers(cors);
       obj.writeHttpMetadata(h);
       h.set('etag', obj.httpEtag);
       h.set('accept-ranges', 'bytes');
       let status = 200;
-      if (req.headers.has('range') && obj.range && ('offset' in obj.range || 'suffix' in obj.range)) {
-        const start = 'suffix' in obj.range ? obj.size - obj.range.suffix : obj.range.offset;
-        const len = 'suffix' in obj.range ? obj.range.suffix : (obj.range.length ?? (obj.size - start));
-        h.set('content-range', `bytes ${start}-${start + len - 1}/${obj.size}`);
-        h.set('content-length', String(len));
+      if (range) {
+        const size = obj.size;
+        const first = 'suffix' in range ? Math.max(0, size - range.suffix) : range.offset;
+        const last = 'length' in range ? Math.min(size - 1, first + range.length - 1) : size - 1;
+        if (first >= size) return new Response(null, { status: 416, headers: { ...cors, 'content-range': `bytes */${size}` } });
+        h.set('content-range', `bytes ${first}-${last}/${size}`);
+        h.set('content-length', String(last - first + 1));
         status = 206;
       } else h.set('content-length', String(obj.size));
       return new Response(req.method === 'HEAD' || !('body' in obj) ? null : obj.body, { status, headers: h });
