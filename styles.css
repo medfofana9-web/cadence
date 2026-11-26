@@ -1200,3 +1200,10 @@ label.search-box{display:block}
 .am-rel-item span{max-width:78px}
 .am-sheet .am-link{background:var(--surface-2)}
 .am-sheet .am-play{background:var(--accent);color:#fff}
+.am-dz{margin-top:14px}
+.am-dz:empty{display:none}
+.am-dz-art{position:relative;width:46px;height:46px;flex:none}
+.am-dz-art img{width:46px;height:46px;border-radius:7px;object-fit:cover}
+.am-dz-btn{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.35);border-radius:7px}
+.am-dz-btn svg{width:16px;height:16px;color:#fff}
+.am-dz-row.previewing .am-main b{color:var(--accent)}

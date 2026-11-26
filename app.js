@@ -1,6 +1,6 @@
 import { db, kv, persist, storageInfo, isQuotaError } from './lib/store.js';
 import * as meta from './lib/meta.js';
-import { findSong, fetchFirstImage, artistPhoto } from './lib/identify.js';
+import { findSong, fetchFirstImage, artistPhoto, artistTop } from './lib/identify.js';
 import * as cloud from './lib/cloud.js';
 import { Engine, IS_IOS } from './lib/engine.js';
 import { NativeAudio } from './lib/native.js';
@@ -2115,7 +2115,7 @@ async function renderPanel() {
   $('#lyrics-expand').hidden = P.panel !== 'lyrics';
   if (P.panel === 'queue') { $('#lyrics-return').hidden = true; return renderQueue(); }
   const t = current(); if (!t) return;
-  if (P.panel === 'artist') { $('#lyrics-return').hidden = true; box.innerHTML = t.ext ? '<div class="am-empty">Nothing more to show for this one.</div>' : `<div class="am-panel">${artistMore(t)}</div>`; return; }
+  if (P.panel === 'artist') { $('#lyrics-return').hidden = true; box.innerHTML = t.ext ? '<div class="am-empty">Nothing more to show for this one.</div>' : `<div class="am-panel">${artistMore(t)}</div>`; fillDiscover(); return; }
   if (t.kind === 'ayah' || t.kind === 'surahrec') {
     const cv = curVerse(), a = QR.text.get(cv.s)?.[cv.v - 1]; if (!a) qTextNow(cv.s).then(() => renderPanel()).catch(() => {});
     box.innerHTML = a ? `<div class="lyrics q-now"><p class="q-now-ar" dir="rtl" lang="ar">${esc(a.ar)}</p><p class="q-now-en">${esc(a.en)}</p><div class="lyrics-credit">Translation: Saheeh International</div></div>` : '';
@@ -2591,6 +2591,7 @@ document.addEventListener('click', async e => {
       case 'noop': return;
       case 'pod-play': return podPlay(id);
       case 'artist-more': e.preventDefault(); return artistSheet();
+      case 'dz-preview': return dzPreview(a);
       case 'go-artist': { closeSheet?.(); closeNow(); return setTimeout(() => go('artist/' + encodeURIComponent(a.dataset.name)), 60); }
       case 'rp-story': return replayStory();
       case 'eq': return eqSheet();
@@ -3353,6 +3354,7 @@ function artistMore(t, { sheetMode = false } = {}) {
         ${others.length ? `<button class="am-play" data-play-list="${key}" data-i="0" aria-label="Play all by ${esc(name)}">${icon('play')}</button>` : ''}</div>
       ${shown.length ? `<div class="am-list">${shown.map((x, i) => `<div class="am-row${current()?.id === x.id ? ' playing' : ''}" data-play-list="${key}" data-i="${i}"><img loading="lazy" src="${artOf(x)}" alt=""><span class="am-main"><b class="ellipsis">${esc(x.title)}</b><em class="ellipsis">${esc(x.album || x.artist)}${x.plays ? ` · ${x.plays} play${x.plays === 1 ? '' : 's'}` : ''}</em></span></div>`).join('')}</div>`
         : `<p class="am-empty">This is the only ${esc(name)} song in your library.</p>`}
+      ${sheetMode ? '' : `<div class="am-dz" data-artist="${esc(name)}"></div>`}
       <button class="am-link" data-action="go-artist" data-name="${esc(name)}">${others.length > shown.length ? `See all ${others.length + 1} songs from ${esc(name)}` : `Go to ${esc(name)}`}${icon('back', 'chev')}</button></section>`;
   }).join('');
   const rel = sheetMode ? [] : [...relatedArtists(names)].filter(a => !names.includes(a)).map(a => [a, groups('artist').get(a)]).filter(x => x[1]).slice(0, 10);
@@ -3362,3 +3364,37 @@ function artistSheet() {
   const t = current(); if (!t || t.ext) return;
   sheet(`<div class="am-sheet">${artistMore(t, { sheetMode: true })}</div>`);
 }
+
+/** "Not in your library yet": the artist's popular songs you don't have, with 30-second previews. */
+const nrm = x => (x || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\(.*?\)|\[.*?\]|feat\..*$|ft\..*$/g, '').replace(/[^a-z0-9]/g, '');
+async function fillDiscover() {
+  for (const box of $$('.am-dz')) {
+    const name = box.dataset.artist; if (box.dataset.done) continue; box.dataset.done = '1';
+    let top = []; try { top = await artistTop(name); } catch {}
+    if (!box.isConnected) return;
+    const have = new Set(visible().map(t => nrm(t.title)));
+    const missing = top.filter(r => !have.has(nrm(r.title))).filter((r, i, a) => a.findIndex(x => nrm(x.title) === nrm(r.title)) === i).slice(0, 6);
+    if (!missing.length) continue;
+    box.innerHTML = `<div class="am-sub">Not in your library yet</div><div class="am-list">${missing.map(r => `<div class="am-row am-dz-row" data-action="dz-preview" data-url="${esc(r.preview)}" data-title="${esc(r.title)}"><span class="am-dz-art"><img loading="lazy" src="${esc(r.art)}" alt=""><span class="am-dz-btn">${icon(DZ.url === r.preview ? 'pause' : 'play')}</span></span><span class="am-main"><b class="ellipsis">${esc(r.title)}</b><em class="ellipsis">${esc(r.album)} · Preview</em></span></div>`).join('')}</div>`;
+  }
+}
+const DZ = { el: null, url: '', resume: false };
+function dzStop(resume = true) {
+  if (DZ.el) { DZ.el.pause(); DZ.el = null; }
+  DZ.url = ''; $$('.am-dz-row').forEach(r => { r.classList.remove('previewing'); r.querySelector('.am-dz-btn').innerHTML = icon('play'); });
+  if (resume && DZ.resume) engine.el.play();
+  DZ.resume = false;
+}
+function dzPreview(row) {
+  const url = row.dataset.url;
+  if (DZ.url === url) return dzStop();
+  const wasPlaying = DZ.el ? DZ.resume : !engine.el.paused;
+  dzStop(false); DZ.resume = wasPlaying;
+  if (!engine.el.paused) engine.el.pause();
+  DZ.el = new Audio(url); DZ.url = url;
+  row.classList.add('previewing'); row.querySelector('.am-dz-btn').innerHTML = icon('pause');
+  DZ.el.addEventListener('ended', () => dzStop());
+  DZ.el.addEventListener('error', () => { toast('Couldn’t play this preview'); dzStop(); });
+  DZ.el.play().catch(() => dzStop());
+}
+for (const el of engine.els) el.addEventListener('play', () => { if (DZ.el) dzStop(false); });
