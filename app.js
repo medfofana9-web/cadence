@@ -3443,13 +3443,14 @@ async function loadSuggestions() {
   for (const name of fav.slice(0, 3)) {
     const id = await dzArtistId(name); if (!id) continue;
     const rel = (await dz(`artist/${id}/related?limit=8`))?.data || [];
-    const picks = [];
-    for (const a of rel.slice(0, 8)) { const top = ((await dz(`artist/${a.id}/top?limit=3`))?.data || []).map(r => ({ ...dzTrack(r), artist: r.artist?.name || a.name })).filter(keep); if (top[0]) picks.push(top[0]); }
+    const tops = await Promise.all(rel.slice(0, 8).map(a => dz(`artist/${a.id}/top?limit=3`).then(j => (j?.data || []).map(r => ({ ...dzTrack(r), artist: r.artist?.name || a.name })))));
+    const picks = tops.map(t => t.filter(keep)[0]).filter(Boolean);
     if (picks.length >= 3) out.because.push({ name, items: picks });
     if (out.because.length >= 2) break;
   }
   // more from the artists you play most
-  for (const name of fav.slice(0, 8)) { const id = await dzArtistId(name); if (!id) continue; const top = ((await dz(`artist/${id}/top?limit=10`))?.data || []).map(r => ({ ...dzTrack(r), artist: r.artist?.name || name })).filter(keep).slice(0, 2); out.loved.push(...top); }
+  const lovedTops = await Promise.all(fav.slice(0, 8).map(async name => { const id = await dzArtistId(name); if (!id) return []; return ((await dz(`artist/${id}/top?limit=10`))?.data || []).map(r => ({ ...dzTrack(r), artist: r.artist?.name || name })); }));
+  for (const top of lovedTops) out.loved.push(...top.filter(keep).slice(0, 2));
   // the chart for your favorite genre
   const g = new Map(); for (const t of all) if (t.genre) g.set(t.genre, (g.get(t.genre) || 0) + 1 + (t.plays || 0));
   const topG = [...g].sort((a, b) => b[1] - a[1]).map(x => x[0]).find(x => DZ_GENRES.some(([re]) => re.test(x)));
@@ -3457,7 +3458,8 @@ async function loadSuggestions() {
   return out;
 }
 function discoverView() {
-  if (!DC.sugg && !DC.loading && navigator.onLine) { DC.loading = true; loadSuggestions().then(x => { DC.sugg = x; }).catch(e => { console.warn('discover', e); DC.sugg = { because: [], loved: [], genre: null }; }).finally(() => { DC.loading = false; if (S.route === 'import' && !DC.q) render(); }); }
+  if (!DC.sugg && !DC.cacheTried) { DC.cacheTried = true; kv.get('discover', null).then(c => { if (c && Date.now() - c.at < 12 * 36e5 && !DC.sugg) { DC.sugg = c.v; if (S.route === 'import' && !DC.q) render(); } }); }
+  if (!DC.fresh && !DC.loading && navigator.onLine) { DC.loading = true; loadSuggestions().then(x => { DC.sugg = x; DC.fresh = true; kv.set('discover', { at: Date.now(), v: x }); }).catch(e => { console.warn('discover', e); DC.sugg = { because: [], loved: [], genre: null }; }).finally(() => { DC.loading = false; if (S.route === 'import' && !DC.q) render(); }); }
   const sg = DC.sugg;
   const body = DC.q ? dcResults() : !sg ? `<div class="pod-loading">${navigator.onLine ? 'Finding songs for you…' : 'Connect to the internet to discover songs.'}</div>` : `
     ${sg.because.map(b => `<section class="section"><div class="section-head"><h2>Because you play ${esc(b.name)}</h2></div><div class="shelf dc-shelf">${b.items.map(dcCard).join('')}</div></section>`).join('')}
