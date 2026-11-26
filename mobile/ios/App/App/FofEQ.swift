@@ -19,8 +19,8 @@ enum FofEQ {
                 version: kMTAudioProcessingTapCallbacksVersion_0,
                 clientInfo: UnsafeMutableRawPointer(Unmanaged.passRetained(ctx).toOpaque()),
                 init: tapInit, finalize: tapFinalize, prepare: tapPrepare, unprepare: nil, process: tapProcess)
-            var tap: MTAudioProcessingTap?
-            guard MTAudioProcessingTapCreate(kCFAllocatorDefault, &cb, kMTAudioProcessingTapCreationFlag_PostEffects, &tap) == noErr, let tap = tap else {
+            var made: Unmanaged<MTAudioProcessingTap>?
+            guard MTAudioProcessingTapCreate(kCFAllocatorDefault, &cb, kMTAudioProcessingTapCreationFlag_PostEffects, &made) == noErr, let tap = made?.takeRetainedValue() else {
                 Unmanaged<TapContext>.fromOpaque(cb.clientInfo!).release(); return
             }
             let params = AVMutableAudioMixInputParameters(track: track)
