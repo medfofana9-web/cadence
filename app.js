@@ -116,7 +116,20 @@ function applySettings() {
 let quotaShown = 0;
 function quotaWarning() { if (Date.now() - quotaShown < 10000) return; quotaShown = Date.now(); toast('This device is out of space for Fof Music. Remove some songs or free up storage.'); }
 let syncWarned = 0;
-function syncFailed(e) { console.warn('sync', e); if (Date.now() - syncWarned > 60000) { syncWarned = Date.now(); toast(navigator.onLine ? 'Couldn’t sync just now. Changes are saved here and will sync later.' : 'You’re offline. Changes are saved on this device.'); } }
+// Plain-English versions of the errors that can reach the screen
+function friendlyError(err, fallback = 'Something went wrong. Try again.') {
+  const m = String(err?.message || err || '');
+  if (!navigator.onLine) return 'You’re offline. Connect to the internet and try again.';
+  if (/failed to fetch|networkerror|load failed|network request failed|fetch failed|timeout|timed out|503|502|504|540/i.test(m)) return 'Can’t reach your cloud library right now. Your music on this device still plays. Try again in a minute.';
+  if (/invalid login|invalid credentials/i.test(m)) return 'Email or password is wrong';
+  if (/email not confirmed/i.test(m)) return 'Confirm your email first, then sign in';
+  if (/already registered|already exists/i.test(m)) return 'That email already has an account. Sign in instead.';
+  if (/rate limit|too many/i.test(m)) return 'Too many tries. Wait a minute and try again.';
+  if (/password/i.test(m) && /least|short|weak/i.test(m)) return 'Use a longer password (6+ characters)';
+  return m && m.length < 90 && !/^[A-Z_]+$/.test(m) ? m : fallback;
+}
+let syncRetryT;
+function syncFailed(e) { console.warn('sync', e); clearTimeout(syncRetryT); syncRetryT = setTimeout(() => { if (S.user) syncDown(); }, 120000); if (Date.now() - syncWarned > 60000) { syncWarned = Date.now(); toast(navigator.onLine ? 'Couldn’t sync just now. Changes are saved here and will sync later.' : 'You’re offline. Changes are saved on this device.'); } }
 
 /* listening state that follows you between devices */
 let pushT;
@@ -2175,18 +2188,20 @@ document.addEventListener('click', async e => {
       case 'export': return exportData();
       case 'wipe-device': return confirmSheet('Delete everything on this device?', 'All songs, artwork, playlists and history saved in this browser are removed. Your cloud library (if you’re signed in) is not affected.', 'Delete everything', async () => { engine.el.pause(); for (const s of ['tracks', 'audio', 'art', 'thumbs', 'lyrics', 'playlists', 'kv']) await db.clear(s); location.hash = '#/home'; location.reload(); });
       case 'wipe-cloud': return confirmSheet('Delete your cloud library?', 'Your songs, playlists and history are permanently removed from the cloud. Songs saved on this device stay here.', 'Delete from cloud', async () => { toast('Deleting…'); try { await Promise.all([...S.tracks.values()].filter(t => t.store === 'r2').map(t => cloud.deleteTrack(t.id).catch(() => {}))); await cloud.deleteEverything(); for (const t of S.tracks.values()) { t.cloud = false; if (!t.local) await removeLocal(t.id); else await db.put('tracks', t.id, t); } toast('Your cloud library was deleted'); render(); } catch (err) { syncFailed(err); } });
-      case 'change-pass': return sheet(`<h2>Change password</h2><input class="input full" id="np" type="password" placeholder="New password (6+ characters)" autocomplete="new-password"><div class="actions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="np-go">Save</button></div>`, el => { el.querySelector('#np-go').onclick = async () => { const v = el.querySelector('#np').value; if (v.length < 6) return toast('Use at least 6 characters'); try { await cloud.changePassword(v); closeSheet(); toast('Password changed'); } catch (err) { toast(err.message); } }; });
+      case 'change-pass': return sheet(`<h2>Change password</h2><input class="input full" id="np" type="password" placeholder="New password (6+ characters)" autocomplete="new-password"><div class="actions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="np-go">Save</button></div>`, el => { el.querySelector('#np-go').onclick = async () => { const v = el.querySelector('#np').value; if (v.length < 6) return toast('Use at least 6 characters'); try { await cloud.changePassword(v); closeSheet(); toast('Password changed'); } catch (err) { toast(friendlyError(err, 'Couldn’t change the password. Try again.')); } }; });
       case 'sign-in': case 'sign-up': {
         const email = $('#auth-email').value.trim(), pass = $('#auth-pass').value;
         if (!email || pass.length < 6) return toast('Enter your email and a password of 6+ characters');
         a.disabled = true;
         try {
-          if (a.dataset.action === 'sign-in') await cloud.signIn(email, pass);
+          const net = err => /failed to fetch|networkerror|load failed|fetch failed/i.test(String(err?.message || err));
+          const tryIt = () => a.dataset.action === 'sign-in' ? cloud.signIn(email, pass) : null;
+          if (a.dataset.action === 'sign-in') { try { await tryIt(); } catch (e1) { if (!net(e1)) throw e1; toast('Connecting…'); await new Promise(r => setTimeout(r, 3000)); await tryIt(); } }
           else { const live = await cloud.signUp(email, pass); if (!live) { a.disabled = false; return toast('Check your email to confirm your account, then sign in here'); } }
           S.user = await cloud.user(); await syncDown(); render();
           const localOnly = [...S.tracks.values()].filter(t => t.local && !t.cloud).length;
           toast(localOnly ? 'Signed in · uploading your songs' : 'Signed in');
-        } catch (err) { a.disabled = false; toast(/invalid login/i.test(err.message) ? 'Email or password is wrong' : err.message || 'Couldn’t sign in'); }
+        } catch (err) { a.disabled = false; toast(friendlyError(err, 'Couldn’t sign in. Try again.')); }
         return;
       }
       case 'sign-out': await cloud.signOut(); S.user = null; return render();

@@ -1,0 +1,26 @@
+name: Keep cloud library awake
+
+# Supabase's free plan pauses a project after about a week with no activity,
+# which makes sign-in fail with "Failed to fetch". This checks in every two days
+# so the library never goes to sleep.
+on:
+  schedule:
+    - cron: '17 9 */2 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check in with Supabase
+        run: |
+          URL="https://ixfusgtcorctjgzjylaj.supabase.co"
+          KEY="sb_publishable_5XiaUirw_wLmm6lk67ltyA_wnBRSNdj"
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL/rest/v1/tracks?select=id&limit=1" -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
+          echo "Database answered: $code"
+          curl -s -o /dev/null -w "Sign-in service answered: %{http_code}\n" --max-time 30 "$URL/auth/v1/health" -H "apikey: $KEY"
+          curl -s -o /dev/null -w "File storage answered: %{http_code}\n" --max-time 30 "https://cadence-files.medfofana9.workers.dev/"
+          if [ "$code" != "200" ]; then echo "::error::The cloud library didn't answer ($code). It may be paused: open supabase.com and press Resume."; exit 1; fi
