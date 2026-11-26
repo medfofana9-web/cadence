@@ -92,9 +92,33 @@ function ambient(colors) { return colors ? `--amb-base:${colors.base};--amb-glow
 /* =====================================================================
    Persistence
    ===================================================================== */
+/* Open Fof Music tabs and windows keep each other up to date, and only one of them does background work. */
+const tabs = 'BroadcastChannel' in window ? new BroadcastChannel('fof-music') : null;
+const tell = m => { try { tabs?.postMessage(m); } catch {} };
+let tabsT;
+function listenToOtherTabs() {
+  if (!tabs) return;
+  tabs.onmessage = async ({ data: m }) => {
+    if (m.k === 'gone') {
+      if (!S.tracks.has(m.id)) return;
+      S.tracks.delete(m.id);
+      for (const map of [S.art, S.thumbs]) { const u = map.get(m.id); if (u?.startsWith('blob:')) URL.revokeObjectURL(u); map.delete(m.id); }
+    } else if (m.k === 'track') {
+      const t = await db.get('tracks', m.id); if (!t) return;
+      S.tracks.set(m.id, t);
+      const [a, th] = await Promise.all([db.get('art', m.id), db.get('thumbs', m.id)]);
+      if (a) swapUrl(S.art, m.id, a); if (th) swapUrl(S.thumbs, m.id, th);
+    } else return;
+    S.ver++; S.indexDirty = true;
+    clearTimeout(tabsT); tabsT = setTimeout(() => { render(); renderSidebar(); }, 500);
+  };
+}
+/** Runs background work (folder checks, uploads, identifying) in only one open tab at a time. */
+const oneTab = (name, fn) => navigator.locks ? navigator.locks.request('fof-' + name, { ifAvailable: true }, lock => lock ? fn() : null) : fn();
 async function saveTrack(t, { sync = true } = {}) {
   S.tracks.set(t.id, t); S.indexDirty = true; S.ver++;
   try { await db.put('tracks', t.id, t); } catch (e) { if (isQuotaError(e)) quotaWarning(); throw e; }
+  tell({ k: 'track', id: t.id });
   if (sync && S.user && t.cloud) cloud.saveTrack(t).catch(e => syncFailed(e));
 }
 async function savePlaylist(p) {
@@ -170,6 +194,7 @@ async function boot() {
   }
   if (/iP(hone|ad|od)/.test(navigator.userAgent) && !navigator.standalone) { document.documentElement.classList.add('ios-browser'); try { if (!localStorage.getItem('cadence-a2hs')) { localStorage.setItem('cadence-a2hs', '1'); setTimeout(() => toast('For full screen: tap Share, then Add to Home Screen'), 2500); } } catch {} }
   renderSidebar();
+  listenToOtherTabs();
   window.addEventListener('hashchange', route);
   route();
   updateModes();
@@ -1372,7 +1397,8 @@ async function moveOutOfFolder(t) {
   } catch (e) { console.warn('move out of folder', e); return false; }
 }
 /** Looks through the connected folder (and its subfolders) for songs Fof Music hasn't seen and imports them quietly. */
-async function scanFolder({ user = false } = {}) {
+function scanFolder(o = {}) { return oneTab('scan', () => scanFolderNow(o)); }
+async function scanFolderNow({ user = false } = {}) {
   if (!S.folder || scanning || IMP.running) return;
   let perm = await S.folder.queryPermission?.({ mode: 'read' }).catch(() => 'denied');
   if (perm !== 'granted' && user) perm = await S.folder.requestPermission({ mode: 'read' }).catch(() => 'denied');
@@ -1474,6 +1500,7 @@ async function srcFor(t) {
     for (const [id, u] of P.objUrls) if (id !== t.id && id !== current()?.id && id !== P.preloadFor) { URL.revokeObjectURL(u); P.objUrls.delete(id); }
     return P.objUrls.get(t.id);
   }
+  if (t.local && !blob) { t.local = false; t.downloaded = false; await saveTrack(t, { sync: false }); } // the file was removed elsewhere
   if (t.cloud && S.user) { try { return await cloud.fileUrl('audio/' + t.id, t.store === 'r2' || cloud.r2On()); } catch (e) { console.warn('file', e); return null; } }
   return null;
 }
@@ -2003,6 +2030,7 @@ function editSheet(id) {
 async function removeLocal(id) {
   S.tracks.delete(id); S.ver++; S.indexDirty = true;
   await Promise.all(['tracks', 'audio', 'art', 'thumbs', 'lyrics'].map(s => db.del(s, id)));
+  tell({ k: 'gone', id });
   for (const m of [S.art, S.thumbs]) { const u = m.get(id); if (u?.startsWith('blob:')) URL.revokeObjectURL(u); m.delete(id); }
 }
 function confirmDelete(id) {
@@ -2101,7 +2129,8 @@ async function repairMatches() {
   if (bad.length) { S.ver++; render(); toast(`Fixed ${count(bad.length)} that had the wrong artist or artwork`); }
 }
 /** One-time pass: songs without a confirmed match are listened to and looked up again (on the device that has the files). */
-async function identifyLibrary() {
+function identifyLibrary() { return oneTab('identify', identifyLibraryNow); }
+async function identifyLibraryNow() {
   if (await kv.get('identify-v2') || !navigator.onLine) return;
   // only songs that need it: messy names or a placeholder cover (songs with proper tags already have both right)
   const todo = [...S.tracks.values()].filter(t => t.local && !t.edited && !t.reviewed && t.category === 'Music' && (t.designedCover || (!t.matched && !meta.isReliable(t.original || {}))));
@@ -2142,9 +2171,10 @@ async function refixAll() {
 }
 let uploading = false;
 /** Quietly uploads songs that are still only on this device. */
-function autoUpload() {
+function autoUpload() { return oneTab('upload', autoUploadNow); }
+function autoUploadNow() {
   if (!S.user || !navigator.onLine || uploading || IMP.running) return;
-  if ([...S.tracks.values()].some(t => t.local && !t.cloud)) uploadLocal({ quiet: true });
+  if ([...S.tracks.values()].some(t => t.local && !t.cloud)) return uploadLocal({ quiet: true });
 }
 async function uploadLocal({ quiet = false } = {}) {
   if (uploading) return;
