@@ -929,7 +929,12 @@ html[data-theme=light],[data-theme=light] body,[data-theme=light] #backdrop{back
 
   /* lyrics / up next: song on glass at the top, controls on glass at the bottom */
   .now.panel-open .now-art,.now.panel-open .now-meta{visibility:hidden}
-  .now.panel-open .now-right{padding:0 16px;bottom:calc(196px + var(--safe-b))}
+  .now.panel-open .now-right{padding:0 16px;bottom:calc(236px + var(--safe-b))}
+  .now .q-head{flex-wrap:wrap;row-gap:6px}
+  .now .q-head h3{width:100%}
+  .now .q-tools{width:100%;display:flex;align-items:center;gap:4px}
+  .now .q-tools .link{margin-left:auto}
+  .now .q-tools .link+.link{margin-left:12px}
   .now.panel-open .now-mini{display:flex;align-items:center;gap:10px;padding:8px;margin:2px 0 6px;border-radius:16px;
     background:rgba(255,255,255,.12);border:.5px solid rgba(255,255,255,.2);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
   .now-mini img{width:44px;height:44px;border-radius:9px;object-fit:cover;flex:none}
