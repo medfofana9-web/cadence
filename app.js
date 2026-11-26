@@ -2884,7 +2884,7 @@ VIEWS.show = () => {
   return `${back()}<div class="pod-head"><img src="${esc(sh.art)}" alt=""><div><h1>${esc(sh.title)}</h1><div class="muted">${esc(sh.author)}</div>
       <div class="pod-head-actions">${eps?.length ? `<button class="btn primary" data-action="pod-play" data-id="${esc(eps.find(e => !S.pod.prog[e.id]?.done)?.id || eps[0].id)}">${icon('play')}${S.pod.prog[eps[0].id] ? 'Resume' : 'Latest Episode'}</button>` : ''}
       <button class="btn" data-action="pod-follow" data-id="${esc(id)}">${f ? icon('check') + 'Following' : icon('plus') + 'Follow'}</button></div></div></div>
-    <section class="section"><div class="section-head"><h2>Episodes</h2></div>${eps ? `<div class="pod-eps">${eps.map(e => epRow(e, { art: false })).join('')}</div>` : '<div class="pod-loading">Loading episodes…</div>'}</section>`;
+    <section class="section"><div class="section-head"><h2>Episodes</h2></div>${!eps ? '<div class="pod-loading">Loading episodes…</div>' : eps.length ? `<div class="pod-eps">${eps.map(e => epRow(e, { art: false })).join('')}</div>` : '<p class="muted pod-none">This show’s episodes aren’t available right now.</p>'}</section>`;
 };
 function podResults() {
   const r = PC.results || [];
