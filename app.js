@@ -1092,7 +1092,7 @@ async function importOne(j, known) {
   const t = {
     id: hash, hash, ...(reliable ? { title: tags.title, artist: tags.artist, album: tags.album } : names),
     albumArtist: tags.albumArtist || '', genre: meta.cleanGenre(tags.genre), year: tags.year || '', trackNo: tags.track || '', disc: tags.disc || '',
-    gain: tags.gain, file: f.name, size: f.size, type: f.type || '', addedAt: Date.now(), plays: 0, liked: false, local: true, cloud: false,
+    gain: tags.gain, file: f.name, ...(f.folderPath ? { folderPath: f.folderPath } : {}), size: f.size, type: f.type || '', addedAt: Date.now(), plays: 0, liked: false, local: true, cloud: false,
     original: { title: tags.title || '', artist: tags.artist || '', album: tags.album || '', genre: tags.genre || '', file: f.name },
   };
   const ft = (t.title.match(/\((?:feat\.?|ft\.?|with)\s+([^)]+)\)/i) || t.artist.match(/ (?:feat\.?|ft\.?|featuring) (.+)$/i) || [])[1];
@@ -1336,6 +1336,41 @@ async function connectFolder() {
 }
 async function disconnectFolder() { S.folder = null; S.folderState = ''; await kv.set('folder', null); await kv.set('folderSeen', []); render(); }
 let scanning = false;
+const REMOVED_DIR = 'Removed from Fof Music';
+/**
+ * When a song is removed from the library, its file in the watched folder moves into a "Removed from Fof Music"
+ * folder there (never deleted, so you can still get it back). Needs edit permission for the folder, asked once.
+ */
+async function moveOutOfFolder(t) {
+  if (!S.folder || !t) return false;
+  try {
+    let perm = await S.folder.queryPermission({ mode: 'readwrite' });
+    if (perm !== 'granted') perm = await S.folder.requestPermission({ mode: 'readwrite' });
+    if (perm !== 'granted') return false;
+    // find the file: by the path saved at import, otherwise by name and size anywhere in the folder
+    let dir = S.folder, fh = null;
+    if (t.folderPath) {
+      try { const parts = t.folderPath.split('/'); for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p); fh = await dir.getFileHandle(parts.at(-1)); } catch { dir = S.folder; fh = null; }
+    }
+    if (!fh && t.file) {
+      const look = async (d, depth) => {
+        for await (const [name, h] of d.entries()) {
+          if (h.kind === 'directory') { if (depth < 3 && name !== REMOVED_DIR && !name.startsWith('.')) { const r = await look(h, depth + 1); if (r) return r; } continue; }
+          if (name === t.file) { const f = await h.getFile(); if (!t.size || f.size === t.size) return [d, h]; }
+        }
+        return null;
+      };
+      const r = await look(S.folder, 0); if (r) [dir, fh] = r;
+    }
+    if (!fh || !fh.move) return false;
+    const bin = await S.folder.getDirectoryHandle(REMOVED_DIR, { create: true });
+    let name = fh.name, n = 1;
+    const exists = async nm => { try { await bin.getFileHandle(nm); return true; } catch { return false; } };
+    while (await exists(name)) name = fh.name.replace(/(\.[^.]+)?$/, ` (${n++})$1`);
+    await fh.move(bin, name);
+    return true;
+  } catch (e) { console.warn('move out of folder', e); return false; }
+}
 /** Looks through the connected folder (and its subfolders) for songs Fof Music hasn't seen and imports them quietly. */
 async function scanFolder({ user = false } = {}) {
   if (!S.folder || scanning || IMP.running) return;
@@ -1347,11 +1382,12 @@ async function scanFolder({ user = false } = {}) {
   try {
     const seen = new Set(await kv.get('folderSeen', []));
     const fresh = [], keys = [];
-    const walk = async (dir, depth) => {
+    const walk = async (dir, depth, path = []) => {
       for await (const [name, h] of dir.entries()) {
-        if (h.kind === 'directory') { if (depth < 3 && !name.startsWith('.')) await walk(h, depth + 1); continue; }
+        if (h.kind === 'directory') { if (depth < 3 && !name.startsWith('.') && name !== REMOVED_DIR) await walk(h, depth + 1, [...path, name]); continue; }
         if (!meta.AUDIO_EXT.test(name)) continue;
         const f = await h.getFile().catch(() => null); if (!f) continue;
+        f.folderPath = [...path, name].join('/');
         const key = `${name}|${f.size}|${f.lastModified}`;
         keys.push(key);
         if (!seen.has(key)) fresh.push(f);
@@ -1971,13 +2007,14 @@ async function removeLocal(id) {
 }
 function confirmDelete(id) {
   const t = S.tracks.get(id);
-  confirmSheet(`Remove “${t.title}”?`, `It’s removed from Fof Music${S.user && t.cloud ? ' on all your devices' : ''}. The original file on your computer is not touched.`, 'Remove', async () => {
+  confirmSheet(`Remove “${t.title}”?`, `It’s removed from Fof Music${S.user && t.cloud ? ' on all your devices' : ''}.${S.folder ? ` Its file moves out of “${S.folder.name}” into a “${REMOVED_DIR}” folder, so it isn’t added again.` : ' The original file on your computer is not touched.'}`, 'Remove', async () => {
+    const moved = await moveOutOfFolder(t);
     await removeLocal(id);
     for (const p of S.playlists.values()) if (p.tracks.includes(id)) { p.tracks = p.tracks.filter(x => x !== id); savePlaylist(p); }
     if (S.user && t.cloud) cloud.deleteTrack(id).catch(syncFailed);
     const qi = P.queue.indexOf(id);
     if (qi >= 0) { P.queue.splice(qi, 1); if (qi < P.idx) P.idx--; else if (qi === P.idx) { engine.el.pause(); P.idx = Math.min(P.idx, P.queue.length - 1); if (P.queue.length) loadTrack(P.queue[P.idx], { autoplay: false }); } savePlayer(); }
-    render(); toast('Removed from your library');
+    render(); toast(moved ? `Removed · file moved to “${REMOVED_DIR}”` : 'Removed from your library');
   });
 }
 /* Corrections you make are remembered: the same file name, or the same wrong artist, is fixed the same way next time. */
