@@ -307,7 +307,7 @@ async function syncDown() {
         await cloud.fileUrls(needArt.filter(id => !isR2(id)).map(id => 'art/' + id));
         changed = true; cacheCloudArt(needArt);
       }
-      if (changed) { S.indexDirty = true; render(); }
+      if (changed) { S.indexDirty = true; bgRender(); }
     }
     const pls = await cloud.pullPlaylists();
     if (pls) {
@@ -431,13 +431,28 @@ function route() {
   mountVisible();
 }
 const VIEWS = {};
+/* Background updates (sync, imports, artwork) redraw the page only if something on it changed,
+   and wait until you stop scrolling, so nothing flickers while you browse. */
+let lastHTML = '', lastPage = '', renderT = 0, lastScroll = 0;
+$('#main').addEventListener('scroll', () => { lastScroll = Date.now(); }, { passive: true });
+/** For changes that arrive in the background (new songs syncing in): at most one redraw every few seconds. */
+let bgT = 0, bgLast = 0;
+function bgRender() { const wait = Math.max(0, 4000 - (Date.now() - bgLast)); clearTimeout(bgT); bgT = setTimeout(() => { bgLast = Date.now(); render(); }, wait); }
 function render() {
+  const page = S.route + '/' + (S.param || '');
+  const nav = S.freshNav || page !== lastPage;
+  if (!nav && Date.now() - lastScroll < 900) { clearTimeout(renderT); renderT = setTimeout(render, 1000); return; }
+  clearTimeout(renderT);
+  const keepLists = S.lists, keepV = S.vlists;
   S.lists = {}; S.vlists = {};
   if (S.indexDirty) rebuildIndex();
   const v = VIEWS[S.route] || VIEWS.home;
   const view = $('#view');
   const y = $('#main').scrollTop;
-  view.innerHTML = v();
+  const html = v();
+  if (!nav && html === lastHTML) { S.lists = keepLists; S.vlists = keepV; markPlaying(); paintTime(); return; }
+  lastHTML = html; lastPage = page;
+  view.innerHTML = html;
   if (!S.freshNav) $('#main').scrollTop = y;
   afterRender();
 }
