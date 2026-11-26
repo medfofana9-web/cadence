@@ -202,7 +202,7 @@ async function boot() {
     P.idx = Math.min(Math.max(saved.idx, 0), P.queue.length - 1);
     Object.assign(P, { shuffle: !!saved.shuffle, repeat: saved.repeat || 'off', context: saved.context || '', contextRoute: saved.contextRoute || '', mode: saved.mode || null, seed: saved.seed || null });
     P.played = (saved.played || []).filter(id => S.tracks.has(id));
-    if (P.idx >= 0 && P.queue.length) { const ok = await loadTrack(P.queue[P.idx], { autoplay: false, quiet: true }); if (ok && saved.time) seekWhenReady(saved.time); }
+    if (P.idx >= 0 && P.queue.length) { const ok = await loadTrack(P.queue[P.idx], { autoplay: false, quiet: true }); if (ok && saved.time) { P.resumeAt = saved.time; seekWhenReady(saved.time); } }
   }
   if (/iP(hone|ad|od)/.test(navigator.userAgent) && !navigator.standalone && !IN_APP) { document.documentElement.classList.add('ios-browser'); try { if (!localStorage.getItem('cadence-a2hs')) { localStorage.setItem('cadence-a2hs', '1'); setTimeout(() => toast('For full screen: tap Share, then Add to Home Screen'), 2500); } } catch {} }
   renderSidebar();
@@ -1625,7 +1625,7 @@ async function loadTrack(id, { autoplay = true, quiet = false } = {}) {
     if (!quiet) toast(!t.local && t.cloud && !S.user ? 'Sign in to play songs from your cloud library' : !navigator.onLine && t.cloud ? 'You’re offline and this song isn’t saved on this device' : t.cloud && cloud.lastFileError ? `Couldn’t reach your music (${cloud.lastFileError}). Try again in a moment.` : 'This song isn’t available on this device');
     return false;
   }
-  P.preloadFor = null; P.fadeStarted = false; P.counted = false; P.lyrics = null; P.lyricLine = -1; P.follow = true;
+  P.preloadFor = null; P.fadeStarted = false; P.counted = false; P.lyrics = null; P.lyricLine = -1; P.follow = true; P.resumeAt = 0;
   paintNow(t);
   try { await engine.load(src, { gainDb: gainFor(t), autoplay }); }
   catch (e) { if (e.name === 'NotAllowedError') { updatePlayIcons(); } else if (e.name !== 'AbortError') console.warn(e); }
@@ -1789,8 +1789,10 @@ function updateModes() {
   ['#p-repeat', '#now-repeat'].forEach(s => { $(s).classList.toggle('on', P.repeat !== 'off'); $(s + ' use').setAttribute('href', P.repeat === 'one' ? '#i-repeat1' : '#i-repeat'); $(s).setAttribute('aria-label', { off: 'Repeat off', all: 'Repeat all', one: 'Repeat one' }[P.repeat]); });
 }
 let seeking = false;
+let lastSpotSave = 0;
 function onTime() {
   const el = engine.el, d = el.duration || 0, c = el.currentTime || 0;
+  if (!el.paused && Date.now() - lastSpotSave > 5000) { lastSpotSave = Date.now(); savePlayer(true); } // the spot survives the app being closed
   if (!seeking) {
     for (const s of ['#p-seek', '#now-seek']) { const r = $(s); r.value = d ? c / d * 1000 : 0; paintRange(r); }
     $('#p-cur').textContent = $('#now-cur').textContent = fmt(c);
@@ -1822,6 +1824,8 @@ for (const el of engine.els) {
   el.addEventListener('timeupdate', mine(onTime));
   el.addEventListener('loadedmetadata', mine(() => { const t = current(); if (t && isFinite(el.duration) && (!t.duration || Math.abs(t.duration - el.duration) > 2)) { t.duration = el.duration; saveTrack(t, { sync: false }); } onTime(); }));
   el.addEventListener('play', mine(() => { P.tick = 0; updatePlayIcons(); }));
+  // iPhone ignores a jump made before a song starts loading; make it once playback begins
+  el.addEventListener('playing', mine(() => { if (P.resumeAt) { const at = P.resumeAt; P.resumeAt = 0; if (Math.abs(el.currentTime - at) > 2 && (!el.duration || at < el.duration - 1)) el.currentTime = at; } }));
   el.addEventListener('pause', mine(() => { P.tick = 0; updatePlayIcons(); savePlayer(); }));
   el.addEventListener('waiting', mine(() => $('#player').classList.add('buffering')));
   el.addEventListener('playing', mine(() => $('#player').classList.remove('buffering')));
@@ -1847,7 +1851,7 @@ for (const el of engine.els) {
           const url = URL.createObjectURL(new Blob([raw], { type }));
           const old = P.objUrls.get(t.id); if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
           P.objUrls.set(t.id, url);
-          if (current()?.id === t.id) { await engine.load(url, { gainDb: gainFor(t), autoplay: true }).catch(() => {}); return; }
+          if (current()?.id === t.id) { const at = el.currentTime || P.resumeAt || 0; await engine.load(url, { gainDb: gainFor(t), autoplay: true }).catch(() => {}); if (at > 1) P.resumeAt = at; return; }
         } else console.warn('stream', r.status, src.split('?')[0]);
       } catch (e) { console.warn('stream', e); }
     }
@@ -1861,6 +1865,21 @@ function bindSeek(sel) {
   r.addEventListener('change', () => { const d = engine.el.duration || 0; engine.el.currentTime = r.value / 1000 * d; seeking = false; if (P.lyrics?.lines) syncLyrics(engine.el.currentTime, true); });
 }
 bindSeek('#p-seek'); bindSeek('#now-seek');
+function dragSeek(sel) {
+  const r = $(sel);
+  const at = x => { const b = r.getBoundingClientRect(); return Math.min(1, Math.max(0, (x - b.left) / b.width)); };
+  r.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse') return;
+    e.preventDefault(); try { r.setPointerCapture(e.pointerId); } catch {}
+    r.classList.add('dragging');
+    const set = ev => { r.value = Math.round(at(ev.clientX) * 1000); r.dispatchEvent(new Event('input')); };
+    set(e);
+    const mv = ev => set(ev);
+    const up = () => { r.removeEventListener('pointermove', mv); r.removeEventListener('pointerup', up); r.removeEventListener('pointercancel', up); r.classList.remove('dragging'); r.dispatchEvent(new Event('change')); navigator.vibrate?.(8); };
+    r.addEventListener('pointermove', mv); r.addEventListener('pointerup', up); r.addEventListener('pointercancel', up);
+  });
+}
+dragSeek('#now-seek'); dragSeek('#p-seek');
 $('#p-vol').addEventListener('input', e => { const v = e.target.value / 100; engine.setVolume(v); paintRange(e.target); S.settings.volume = v; clearTimeout(e.target._t); e.target._t = setTimeout(() => kv.set('settings', S.settings), 300); $('#vol-icon use').setAttribute('href', v === 0 ? '#i-mute' : '#i-vol'); });
 
 function updateMediaSession(t) {
