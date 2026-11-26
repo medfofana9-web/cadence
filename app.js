@@ -1960,15 +1960,41 @@ function cycleSpeed() { P.speed = SPEEDS[(SPEEDS.indexOf(P.speed) + 1) % SPEEDS.
 /* =====================================================================
    Now playing: lyrics and queue
    ===================================================================== */
+/**
+ * iPhone: the cover flies between the mini player and the full player, the way Apple Music does it.
+ * A copy of the cover moves between the two spots while the sheet slides; the real covers are hidden meanwhile.
+ */
+function coverFlight(opening) {
+  if (innerWidth > 820 || document.documentElement.dataset.motion === 'reduce' || !$('#p-art')?.src) return;
+  const n = $('#now'), mini = $('#p-art'), big = $('#now-art');
+  const m = mini.getBoundingClientRect(); if (!m.width) return;
+  // the big cover's spot once the sheet has finished sliding (measured against the sheet itself)
+  const sr = n.getBoundingClientRect(), br = big.parentElement.getBoundingClientRect();
+  const end = { left: br.left - sr.left, top: br.top - sr.top, width: br.width, height: br.height };
+  if (!end.width) return;
+  const from = opening ? { left: m.left, top: m.top, width: m.width, height: m.height, r: 11 } : { ...end, r: 14 };
+  const to = opening ? { ...end, r: 14 } : { left: m.left, top: m.top, width: m.width, height: m.height, r: 11 };
+  const img = document.createElement('img'); img.src = big.src || mini.src; img.alt = '';
+  img.style.cssText = `position:fixed;z-index:80;object-fit:cover;pointer-events:none;left:0;top:0;width:${from.width}px;height:${from.height}px;border-radius:${from.r}px;transform:translate(${from.left}px,${from.top}px);box-shadow:0 18px 40px rgba(0,0,0,.45)`;
+  document.body.appendChild(img);
+  big.style.opacity = '0'; mini.style.opacity = '0';
+  const a = img.animate([
+    { transform: `translate(${from.left}px,${from.top}px)`, width: from.width + 'px', height: from.height + 'px', borderRadius: from.r + 'px' },
+    { transform: `translate(${to.left}px,${to.top}px)`, width: to.width + 'px', height: to.height + 'px', borderRadius: to.r + 'px' },
+  ], { duration: 520, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'forwards' });
+  const done = () => { img.remove(); big.style.opacity = ''; mini.style.opacity = ''; };
+  a.onfinish = done; a.oncancel = done; setTimeout(done, 800);
+}
 function openNow(panel) {
   if (!current()) return;
-  const n = $('#now'); n.classList.add('open'); n.setAttribute('aria-hidden', 'false'); document.body.classList.add('now-is-open');
+  const n = $('#now'); if (!panel && !n.classList.contains('open')) coverFlight(true); n.classList.add('open'); n.setAttribute('aria-hidden', 'false'); document.body.classList.add('now-is-open');
   if (panel) { P.panel = panel; n.classList.add('panel-open'); } else if (innerWidth <= 820) n.classList.remove('panel-open');
   history.pushState({ now: true }, ''); P.nowState = true;
   renderPanel();
 }
 function closeNow(fromPop) {
   const n = $('#now'); if (!n.classList.contains('open')) return;
+  if (!n.classList.contains('panel-open')) coverFlight(false);
   n.classList.remove('open', 'panel-open', 'lyrics-full'); n.setAttribute('aria-hidden', 'true'); document.body.classList.remove('now-is-open');
   if (!fromPop && P.nowState) { P.nowState = false; history.back(); }
 }
