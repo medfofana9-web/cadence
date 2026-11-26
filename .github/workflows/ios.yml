@@ -39,7 +39,22 @@ jobs:
             -derivedDataPath build MARKETING_VERSION="$V" CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tail -25
           mkdir -p Payload && cp -R build/Build/Products/Release-iphoneos/App.app Payload/
-          zip -qry FofMusic.ipa Payload && ls -la FofMusic.ipa
+          zip -qry FofMusic-basic.ipa Payload && ls -la FofMusic-basic.ipa
+      - name: Add the home screen widget
+        working-directory: mobile/ios
+        run: |
+          set -o pipefail
+          brew install xcodegen ldid >/dev/null
+          cd Widget && xcodegen generate --quiet
+          xcodebuild -project FofWidget.xcodeproj -scheme FofWidget -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build MARKETING_VERSION="$V" CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tail -15
+          APP=../App/Payload/App.app
+          mkdir -p "$APP/PlugIns" && cp -R build/Build/Products/Release-iphoneos/FofWidget.appex "$APP/PlugIns/"
+          # the installer reads these to set up the shared space the widget uses
+          ldid -Swidget.entitlements "$APP/PlugIns/FofWidget.appex/FofWidget"
+          ldid -Sapp.entitlements "$APP/App"
+          cd ../App && rm -f FofMusic.ipa && zip -qry FofMusic.ipa Payload && ls -la FofMusic.ipa
       - name: Try it in the iPhone simulator
         working-directory: mobile/ios/App
         continue-on-error: true
@@ -56,6 +71,7 @@ jobs:
           name: ios-build
           path: |
             mobile/ios/App/FofMusic.ipa
+            mobile/ios/App/FofMusic-basic.ipa
             mobile/ios/App/shots
       - name: Publish for SideStore
         env:
@@ -91,4 +107,4 @@ jobs:
           }
           JSON
           gh release view ios -R "$R" >/dev/null 2>&1 || gh release create ios -R "$R" --title "Fof Music for iPhone" --notes "Add this to SideStore: https://github.com/$R/releases/download/ios/sidestore-source.json" --latest=false
-          gh release upload ios FofMusic.ipa sidestore-source.json -R "$R" --clobber
+          gh release upload ios FofMusic.ipa FofMusic-basic.ipa sidestore-source.json -R "$R" --clobber

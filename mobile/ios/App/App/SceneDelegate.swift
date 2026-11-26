@@ -12,9 +12,17 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window?.makeKeyAndVisible()
 
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
+        if let u = connectionOptions.urlContexts.first?.url { handle(u) }
+    }
+
+    /// fofmusic://flow, fofmusic://toggle … from the home screen widget.
+    private func handle(_ url: URL) {
+        guard url.scheme == "fofmusic", let a = url.host, !a.isEmpty else { return }
+        FofSiri.run(a)
     }
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        for c in URLContexts { handle(c.url) }
         SceneDelegateProxy.shared.scene(scene, openURLContexts: URLContexts)
     }
 

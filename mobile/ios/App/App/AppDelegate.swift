@@ -41,6 +41,7 @@ class FofViewController: CAPBridgeViewController {
 
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(FofNativePlugin())
+        bridge?.registerPluginInstance(FofPlayerPlugin())
     }
 
     override func viewDidLoad() {
@@ -66,12 +67,20 @@ public class FofNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "openSideStore", returnType: CAPPluginReturnPromise),
     ]
 
+    public override func load() {
+        NotificationCenter.default.addObserver(forName: .init("FofSiri"), object: nil, queue: .main) { [weak self] n in
+            if let a = n.object as? String { FofSiri.pending = nil; self?.notifyListeners("siri", data: ["action": a]) }
+        }
+    }
+
     @objc func info(_ call: CAPPluginCall) {
         var out: [String: Any] = [
             "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
             "build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "",
         ]
         if let d = FofNativePlugin.profileExpiry() { out["expires"] = ISO8601DateFormatter().string(from: d) }
+        if let a = FofSiri.pending { out["siri"] = a; FofSiri.pending = nil }
+        out["player"] = true
         call.resolve(out)
     }
 
