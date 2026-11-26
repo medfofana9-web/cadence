@@ -1829,9 +1829,26 @@ for (const el of engine.els) {
     if (P.preloadFor && engine.hasSpare(P.preloadFor)) return advanceTo(P.preloadFor, 0);
     next(true);
   }));
-  el.addEventListener('error', mine(() => {
-    if (!el.getAttribute('src')) return;
+  el.addEventListener('error', mine(async () => {
+    const src = el.getAttribute('src'); if (!src) return;
     const t = current(); const code = el.error?.code;
+    // the iPhone's player can refuse a streamed song it would happily play once downloaded (missing file type,
+    // range quirks): download it once and play that copy instead of skipping
+    if (t && /^https?:/.test(src) && !(P.streamRetry ||= new Set()).has(t.id)) {
+      P.streamRetry.add(t.id);
+      try {
+        const r = await fetch(src);
+        if (r.ok) {
+          const raw = await r.blob();
+          const ext = (t.file || '').split('.').pop().toLowerCase();
+          const type = /^audio\//.test(raw.type) ? raw.type : ({ mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac', wav: 'audio/wav', ogg: 'audio/ogg', opus: 'audio/ogg' }[ext] || 'audio/mpeg');
+          const url = URL.createObjectURL(new Blob([raw], { type }));
+          const old = P.objUrls.get(t.id); if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
+          P.objUrls.set(t.id, url);
+          if (current()?.id === t.id) { await engine.load(url, { gainDb: gainFor(t), autoplay: true }).catch(() => {}); return; }
+        } else console.warn('stream', r.status, src.split('?')[0]);
+      } catch (e) { console.warn('stream', e); }
+    }
     toast(code === 4 ? `“${t?.title || 'This song'}” is in a format this browser can’t play` : code === 2 ? 'Network problem. Skipping ahead.' : `“${t?.title || 'This song'}” couldn’t be played. Skipping.`);
     setTimeout(() => next(true), 800);
   }));
