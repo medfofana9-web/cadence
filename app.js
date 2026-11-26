@@ -2019,13 +2019,15 @@ async function fileArt(t) {
  * Re-checks one song from its original file details. Applies a lookup only when it passes the strict
  * artist + title + length checks; otherwise puts back the cleaned-up file details and the file's own artwork.
  */
-async function rematch(t, { online = navigator.onLine } = {}) {
+async function rematch(t, { online = navigator.onLine, keepMatch = false } = {}) {
   const o = await originalOf(t);
   const reliable = meta.isReliable(o);
   const base = reliable ? { title: o.title, artist: o.artist, album: o.album } : applyFixes(meta.cleanNames(o, o.file || t.file || '', knownArtists().filter(a => a !== t.artist), S.channels), o);
   const music = meta.categorize({ ...t, ...base }) === 'Music';
   const blob = online && music && t.local ? await db.get('audio', t.id).catch(() => null) : null;
   const found = online && music ? await findSong(base, { blob, duration: t.duration }).catch(() => null) : null;
+  // an automatic pass never undoes an earlier match just because a catalog didn't answer this time
+  if (!found && keepMatch && t.matched) return false;
   let art = null;
   if (found) {
     Object.assign(t, reliable || base.fixed ? { title: base.title, artist: base.artist, album: base.album || found.album } : { title: found.title, artist: found.artist, album: found.album || base.album });
@@ -2063,13 +2065,13 @@ async function repairMatches() {
 }
 /** One-time pass: songs without a confirmed match are listened to and looked up again (on the device that has the files). */
 async function identifyLibrary() {
-  if (await kv.get('identify-v1') || !navigator.onLine) return;
+  if (await kv.get('identify-v2') || !navigator.onLine) return;
   // only songs that need it: messy names or a placeholder cover (songs with proper tags already have both right)
   const todo = [...S.tracks.values()].filter(t => t.local && !t.edited && !t.reviewed && t.category === 'Music' && (t.designedCover || (!t.matched && !meta.isReliable(t.original || {}))));
-  if (!todo.length) { await kv.set('identify-v1', true); return; }
+  if (!todo.length) { await kv.set('identify-v2', true); return; }
   let found = 0;
-  for (const t of todo) { if (!navigator.onLine) return; try { if (await rematch(t)) found++; } catch (e) { console.warn('identify', e); } await new Promise(r => setTimeout(r, 1500)); } // gentle on Apple's search limits
-  await kv.set('identify-v1', true);
+  for (const t of todo) { if (!navigator.onLine) return; try { if (await rematch(t, { keepMatch: true })) found++; } catch (e) { console.warn('identify', e); } await new Promise(r => setTimeout(r, 1500)); } // gentle on Apple's search limits
+  await kv.set('identify-v2', true);
   S.ver++; render();
   if (found) toast(`Identified ${count(found)} by sound and fixed their names and artwork`);
 }
