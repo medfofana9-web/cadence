@@ -21,10 +21,10 @@ const P = {
   listen: null, preloadFor: null, fadeStarted: false,
 };
 const DEFAULTS = {
-  autoplay: true, accent: 'coral', autoFix: true, volume: 1, theme: 'dark', density: 'comfortable', reduceMotion: false,
+  autoplay: true, accent: 'fof', autoFix: true, volume: 1, theme: 'dark', density: 'comfortable', reduceMotion: false,
   crossfade: 0, gapless: true, leveling: true, hideExplicit: false, keepHistory: true, songSort: 'added', songDir: -1,
 };
-const ACCENTS = { coral: ['#ff6a4d', '255,106,77', '#1a0703'], amber: ['#f5b041', '245,176,65', '#1d1302'], sky: ['#5ab4ff', '90,180,255', '#03121f'], mint: ['#4fd1a1', '79,209,161', '#02180f'], lilac: ['#b69cff', '182,156,255', '#120a24'], rose: ['#ff5c8a', '255,92,138', '#22040f'] };
+const ACCENTS = { fof: ['#ff2e3e', '255,46,62', '#ffffff'], coral: ['#ff6a4d', '255,106,77', '#1a0703'], amber: ['#f5b041', '245,176,65', '#1d1302'], sky: ['#5ab4ff', '90,180,255', '#03121f'], mint: ['#4fd1a1', '79,209,161', '#02180f'], lilac: ['#b69cff', '182,156,255', '#120a24'], rose: ['#ff5c8a', '255,92,138', '#22040f'] };
 const PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#1c1c1f"/><path d="M42 66a7 7 0 1 1-4-6.3V36l22-4.5v28.8a7 7 0 1 1-4-6.3V40.6l-14 2.9z" fill="#3a3a3f"/></svg>');
 const DAY = 86400000;
 
@@ -105,7 +105,7 @@ async function savePlaylist(p) {
 }
 async function saveSettings() { await kv.set('settings', S.settings); applySettings(); queueStatePush(); }
 function applySettings() {
-  const [hex, rgb, ink] = ACCENTS[S.settings.accent] || ACCENTS.coral;
+  const [hex, rgb, ink] = ACCENTS[S.settings.accent] || ACCENTS.fof;
   const r = document.documentElement;
   r.style.setProperty('--accent', hex); r.style.setProperty('--tint', rgb); r.style.setProperty('--accent-ink', ink);
   r.dataset.theme = S.settings.theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : S.settings.theme;
@@ -114,7 +114,7 @@ function applySettings() {
   document.querySelector('meta[name=theme-color]').content = r.dataset.theme === 'light' ? '#f6f5f3' : '#09090a';
 }
 let quotaShown = 0;
-function quotaWarning() { if (Date.now() - quotaShown < 10000) return; quotaShown = Date.now(); toast('This device is out of space for Cadence. Remove some songs or free up storage.'); }
+function quotaWarning() { if (Date.now() - quotaShown < 10000) return; quotaShown = Date.now(); toast('This device is out of space for Fof Music. Remove some songs or free up storage.'); }
 let syncWarned = 0;
 function syncFailed(e) { console.warn('sync', e); if (Date.now() - syncWarned > 60000) { syncWarned = Date.now(); toast(navigator.onLine ? 'Couldn’t sync just now. Changes are saved here and will sync later.' : 'You’re offline. Changes are saved on this device.'); } }
 
@@ -135,6 +135,7 @@ function queueStatePush() {
 async function boot() {
   persist();
   S.settings = { ...DEFAULTS, ...(await kv.get('settings', {})) };
+  if (!S.settings.fofRed) { S.settings.fofRed = true; if (S.settings.accent === 'coral') S.settings.accent = 'fof'; kv.set('settings', S.settings); } // one-time move to the FOF red
   applySettings();
   matchMedia('(prefers-color-scheme: light)').addEventListener?.('change', applySettings);
   const [tracks, pls, arts, thumbs] = await Promise.all([db.all('tracks'), db.all('playlists'), db.all('art'), db.all('thumbs')]);
@@ -533,7 +534,7 @@ function relatedArtists(names) {
   names.forEach(n => out.delete(n)); out.delete('Unknown Artist');
   return out;
 }
-/** Cadence Flow: endless listening weighted by what you like and play. */
+/** Fof Flow: endless listening weighted by what you like and play. */
 function flowPicks(n = 15) {
   const counts = playCounts(e => Date.now() - e.at < 90 * DAY);
   const recent = new Set([...P.played.slice(-60), ...P.queue.slice(Math.max(0, P.idx - 30), P.idx + 1)]);
@@ -630,7 +631,7 @@ VIEWS.home = () => {
   const moods = Object.entries(MOODS).map(([k, m]) => [k, m, moodList(k).length]).filter(x => x[2]);
   return `
   <div class="page-head home-head"><div><div class="eyebrow">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div><h1>${greeting()}</h1><div class="lede">${cur ? 'Pick up right where you left off.' : 'Your soundtrack starts here.'}</div></div>
-    <button class="btn flow-btn" data-action="flow"><svg><use href="#i-flow"/></svg>Cadence Flow</button></div>
+    <button class="btn flow-btn" data-action="flow"><svg><use href="#i-flow"/></svg>Fof Flow</button></div>
   <section class="hero ${cur ? 'live' : ''}" style="${richAmbient(hero.colors)}">
     <div class="hero-art" data-play-list="${heroKey}" data-i="0"><img src="${artOf(hero, 'full')}" alt=""></div>
     <div class="hero-info"><div class="eyebrow">${cur ? 'Continue listening' : recent.length ? 'Last played' : 'Newest in your library'}</div>
@@ -639,7 +640,7 @@ VIEWS.home = () => {
       <div class="row-actions">${cur ? `<button class="btn primary" data-action="toggle"><svg><use href="#i-${engine.el.paused ? 'play' : 'pause'}"/></svg>${engine.el.paused ? (resumeAt ? `Resume at ${fmt(resumeAt)}` : 'Play') : 'Pause'}</button>` : `<button class="btn primary" data-play-list="${heroKey}" data-i="0"><svg><use href="#i-play"/></svg>Play</button>`}
       <button class="btn ghost" data-action="radio" data-id="${hero.id}"><svg><use href="#i-radio"/></svg>Song radio</button></div></div>
   </section>
-  ${(() => { const n = reviewList().length; return n ? `<a class="check-banner" href="#/review"><div class="cb-stack">${reviewList().slice(0, 3).map(t => `<img src="${artOf(t)}" alt="">`).join('')}</div><div><b>${count(n)} to check</b><span>Quick look at names Cadence wasn’t sure about</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''; })()}
+  ${(() => { const n = reviewList().length; return n ? `<a class="check-banner" href="#/review"><div class="cb-stack">${reviewList().slice(0, 3).map(t => `<img src="${artOf(t)}" alt="">`).join('')}</div><div><b>${count(n)} to check</b><span>Quick look at names Fof Music wasn’t sure about</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''; })()}
   ${ctxTiles.length ? `<section class="section"><div class="section-head"><h2>Jump back in</h2></div><div class="tiles">${ctxTiles.join('')}</div></section>` : ''}
   ${dailies.length ? shelf('Your daily mixes', dailies.map(mixCard).join(''), { sub: 'Your artists, grouped by sound · reshuffled every day' }) : ''}
   ${recent.length ? shelf('Recently played', recent.slice(0, 16).map((t, i) => trackCard(t, recentKey, i)).join(''), { more: 'smart/recently-played' }) : ''}
@@ -789,7 +790,7 @@ VIEWS.playlist = () => {
     ${p.tracks.length ? `<div class="toolbar"><div class="seg">${[['custom', 'Custom order'], ['title', 'Title'], ['artist', 'Artist'], ['added', 'Recently added']].map(([k, l]) => `<button class="${k === sort ? 'on' : ''}" data-action="pl-sort" data-pl="${p.id}" data-sort="${k}">${l}</button>`).join('')}</div>
       <div class="filter-box"><svg><use href="#i-search"/></svg><input class="input" id="pl-filter" data-pl="${p.id}" placeholder="Find in playlist" value="${esc(f)}"></div></div>
       ${trackRows(ts, { context: p.name, key: 'pl:' + p.id, sortable: canDrag ? 'pl:' + p.id : '', cols: ['album', 'added'] })}` : ''}
-    ${p.missing?.length ? `<section class="section"><div class="section-head"><div><h2>Not in your library yet</h2><div class="section-sub">${p.missing.length} from your Apple Music playlist. Add them to Cadence and they drop into this playlist on their own.</div></div><button class="btn small ghost" data-action="copy-missing" data-pl="${p.id}">Copy list</button></div>
+    ${p.missing?.length ? `<section class="section"><div class="section-head"><div><h2>Not in your library yet</h2><div class="section-sub">${p.missing.length} from your Apple Music playlist. Add them to Fof Music and they drop into this playlist on their own.</div></div><button class="btn small ghost" data-action="copy-missing" data-pl="${p.id}">Copy list</button></div>
       <div class="missing-list">${p.missing.map(m => `<div class="miss"><span class="ellipsis">${esc(m.title)}</span><span class="muted ellipsis">${esc(m.artist || '')}</span></div>`).join('')}</div></section>` : ''}`;
 };
 VIEWS.smart = () => {
@@ -841,7 +842,7 @@ VIEWS.insights = () => {
   const peak = hoursArr.indexOf(Math.max(...hoursArr));
   const tsKey = listKey(topSongs.map(([id]) => id), 'Your top songs');
   const maxA = topArtists[0]?.[1] || 1;
-  return `${back()}<div class="page-head"><div><div class="eyebrow">Insights</div><h1>Your listening</h1><div class="lede">Based only on songs you’ve actually played in Cadence.</div></div></div>
+  return `${back()}<div class="page-head"><div><div class="eyebrow">Insights</div><h1>Your listening</h1><div class="lede">Based only on songs you’ve actually played in Fof Music.</div></div></div>
     <div class="stats">
       <div class="stat"><b>${hours(secs)}</b><span>Total listening</span></div>
       <div class="stat"><b>${hours(thisMonth.reduce((a, e) => a + (e.s || 0), 0))}</b><span>This month</span></div>
@@ -860,7 +861,7 @@ VIEWS.insights = () => {
 };
 
 /* =====================================================================
-   Review tray: songs Cadence isn't sure about
+   Review tray: songs Fof Music isn't sure about
    ===================================================================== */
 function needsReview(t) {
   if (t.reviewed || t.edited || t.matched) return false;
@@ -888,10 +889,10 @@ function reviewRow(t) {
 VIEWS.review = () => {
   const list = reviewList();
   const artists = knownArtists();
-  return `${back()}<div class="page-head"><div><div class="eyebrow">Library</div><h1>Check these</h1><div class="lede">Cadence wasn’t sure about these names. Fix what’s wrong and tap Looks good. What you correct is remembered for future imports.</div></div>
+  return `${back()}<div class="page-head"><div><div class="eyebrow">Library</div><h1>Check these</h1><div class="lede">Fof Music wasn’t sure about these names. Fix what’s wrong and tap Looks good. What you correct is remembered for future imports.</div></div>
     ${list.length > 1 ? `<button class="btn ghost" data-action="rv-all">Mark all as good</button>` : ''}</div>
     <datalist id="artist-list">${artists.map(a => `<option value="${esc(a)}">`).join('')}</datalist>
-    ${list.length ? `<div class="rv-list">${list.map(reviewRow).join('')}</div>` : '<div class="empty-state small"><div class="empty-mark"><svg><use href="#i-check"/></svg></div><h2>All clear</h2><p>Every song has a name and artist Cadence is confident about.</p></div>'}`;
+    ${list.length ? `<div class="rv-list">${list.map(reviewRow).join('')}</div>` : '<div class="empty-state small"><div class="empty-mark"><svg><use href="#i-check"/></svg></div><h2>All clear</h2><p>Every song has a name and artist Fof Music is confident about.</p></div>'}`;
 };
 async function saveReview(id, { approve = false } = {}) {
   const t = S.tracks.get(id); const row = document.querySelector(`[data-rv="${id}"]`); if (!t || !row) return;
@@ -977,8 +978,8 @@ VIEWS.import = () => {
       <div class="drop-text"><h2>${IS_IOS ? 'Add songs from Files' : 'Drop a folder or songs here'}</h2><p>${IS_IOS ? 'Pick songs saved in the Files app. Your full library is easiest to add from your computer, then sign in here to play it.' : 'Your Mac keeps songs in Music → Media → Music. Choose that folder to bring in everything.'}</p></div>
       <div class="row-actions">${IS_IOS ? '' : '<button class="btn primary" data-action="pick-folder"><svg><use href="#i-album"/></svg>Choose folder</button>'}<button class="btn ${IS_IOS ? 'primary' : ''}" data-action="pick-files"><svg><use href="#i-note"/></svg>Choose songs</button></div>
     </div>
-    ${CAN_WATCH ? `<div class="folder-card">${S.folder ? `<div class="fc-icon on"><svg><use href="#i-check"/></svg></div><div class="fc-text"><b>Watching “${esc(S.folder.name)}”</b><span>New songs you save there are added automatically whenever you open Cadence.${S.lastScan ? ' Last checked ' + new Date(S.lastScan).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) + '.' : ''}</span></div><button class="btn small" data-action="scan-folder">Check now</button><button class="btn small ghost" data-action="disconnect-folder">Stop</button>`
-      : `<div class="fc-icon"><svg><use href="#i-flow"/></svg></div><div class="fc-text"><b>Add new songs automatically</b><span>Connect the folder your downloads go to (usually Downloads). Every new song you save there shows up in Cadence on its own.</span></div><button class="btn small primary" data-action="connect-folder">Connect folder</button>`}</div>` : ''}
+    ${CAN_WATCH ? `<div class="folder-card">${S.folder ? `<div class="fc-icon on"><svg><use href="#i-check"/></svg></div><div class="fc-text"><b>Watching “${esc(S.folder.name)}”</b><span>New songs you save there are added automatically whenever you open Fof Music.${S.lastScan ? ' Last checked ' + new Date(S.lastScan).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) + '.' : ''}</span></div><button class="btn small" data-action="scan-folder">Check now</button><button class="btn small ghost" data-action="disconnect-folder">Stop</button>`
+      : `<div class="fc-icon"><svg><use href="#i-flow"/></svg></div><div class="fc-text"><b>Add new songs automatically</b><span>Connect the folder your downloads go to (usually Downloads). Every new song you save there shows up in Fof Music on its own.</span></div><button class="btn small primary" data-action="connect-folder">Connect folder</button>`}</div>` : ''}
     <div class="folder-card"><div class="fc-icon"><svg><use href="#i-note"/></svg></div><div class="fc-text"><b>Bring your Apple Music playlists</b><span>In the Music app: click a playlist → File → Library → Export Playlist… → save as Unicode Text. Then choose those files here.</span></div><button class="btn small" data-action="pick-playlists">Choose playlist files</button></div>
     ${signedOut ? `<p class="note">You’re not signed in, so new songs stay on this device. <a href="#/settings/account">Sign in</a> to play them on your other devices too.</p>` : S.user ? `<p class="note"><svg><use href="#i-cloud"/></svg>New songs upload to your cloud library so your other devices can play them.</p>` : `<p class="note">Songs are saved in this browser on this device.</p>`}
     ${st.jobs.length ? `<div class="imp-stats" id="imp-stats">${impStats()}</div>
@@ -1017,7 +1018,7 @@ async function filesFromDrop(dt) {
 }
 async function importFiles(files, { retry = false, background = false } = {}) {
   const audio = files.filter(f => meta.AUDIO_EXT.test(f.name) || f.type.startsWith('audio/'));
-  if (!audio.length) { toast(files.length ? 'No songs found there. Cadence reads MP3, M4A, AAC, FLAC and WAV.' : 'Nothing selected'); return; }
+  if (!audio.length) { toast(files.length ? 'No songs found there. Fof Music reads MP3, M4A, AAC, FLAC and WAV.' : 'Nothing selected'); return; }
   if (IMP.running) { toast('Still importing. Wait for it to finish first.'); return; }
   if (S.route !== 'import' && !background) go('import');
   if (!retry) Object.assign(IMP, { jobs: [], found: 0, added: 0, skipped: 0, failed: 0, maybeDup: 0 });
@@ -1308,7 +1309,7 @@ async function connectFolder() {
 }
 async function disconnectFolder() { S.folder = null; S.folderState = ''; await kv.set('folder', null); await kv.set('folderSeen', []); render(); }
 let scanning = false;
-/** Looks through the connected folder (and its subfolders) for songs Cadence hasn't seen and imports them quietly. */
+/** Looks through the connected folder (and its subfolders) for songs Fof Music hasn't seen and imports them quietly. */
 async function scanFolder({ user = false } = {}) {
   if (!S.folder || scanning || IMP.running) return;
   let perm = await S.folder.queryPermission?.({ mode: 'read' }).catch(() => 'denied');
@@ -1367,7 +1368,7 @@ VIEWS.settings = () => {
       ${sw('autoFix', 'Fix names and artwork on import', 'Cleans up titles like “Official Video” and looks up album artwork. Songs with complete tags keep their own names.')}
       <div class="set-row"><div class="lbl"><b>Fix all songs again</b><span>Re-checks names and artwork for songs you haven’t edited yourself</span></div><button class="btn" data-action="refix-all">Fix all</button></div>
       ${CAN_WATCH ? `<div class="set-row"><div class="lbl"><b>Auto-import folder</b><span>${S.folder ? `Watching “${esc(S.folder.name)}”` : 'Not connected. New songs saved to a folder you pick are added automatically.'}</span></div>${S.folder ? '<button class="btn ghost" data-action="disconnect-folder">Stop watching</button>' : '<button class="btn" data-action="connect-folder">Connect folder</button>'}</div>` : ''}
-      <div class="set-row"><div class="lbl"><b>Check these</b><span>${reviewList().length ? `${count(reviewList().length)} with names Cadence isn’t sure about` : 'Nothing to check'}</span></div><a class="btn" href="#/review">Open</a></div>
+      <div class="set-row"><div class="lbl"><b>Check these</b><span>${reviewList().length ? `${count(reviewList().length)} with names Fof Music isn’t sure about` : 'Nothing to check'}</span></div><a class="btn" href="#/review">Open</a></div>
       ${S.channels.length ? `<div class="set-row"><div class="lbl"><b>Channels, not artists</b><span>${S.channels.map(esc).join(', ')}</span></div><button class="btn ghost" data-action="clear-channels">Reset</button></div>` : ''}
       <div class="set-row"><div class="lbl"><b>Possible duplicates</b><span>${dups ? `${dups} group${dups > 1 ? 's' : ''} to review` : 'None found'}</span></div><a class="btn" href="#/duplicates">Review</a></div>
       <div class="set-row"><div class="lbl"><b>Storage on this device</b><span id="storage-used">${count(local)} saved here</span></div>${S.user ? '<button class="btn ghost" data-action="clear-device">Remove downloads</button>' : ''}</div></div>`; },
@@ -1389,9 +1390,9 @@ VIEWS.settings = () => {
       <div class="set-row"><div class="lbl"><b>Export my data</b><span>A file with your library details, playlists and listening history (no audio)</span></div><button class="btn" data-action="export">Export</button></div>
       <div class="set-row"><div class="lbl"><b>Delete everything on this device</b><span>Removes all songs, artwork and history saved in this browser</span></div><button class="btn danger" data-action="wipe-device">Delete</button></div>
       ${S.user ? `<div class="set-row"><div class="lbl"><b>Delete my cloud library</b><span>Permanently removes your songs, playlists and history from the cloud</span></div><button class="btn danger" data-action="wipe-cloud">Delete</button></div>` : ''}</div>
-      <p class="fine">What Cadence stores: your song files and artwork, song details, playlists, likes, play counts and a log of what you played and when. On this device it lives in your browser’s storage. When you’re signed in, a copy is kept in your private cloud library so your other devices can use it. Nothing is shared with anyone else.</p>`,
+      <p class="fine">What Fof Music stores: your song files and artwork, song details, playlists, likes, play counts and a log of what you played and when. On this device it lives in your browser’s storage. When you’re signed in, a copy is kept in your private cloud library so your other devices can use it. Nothing is shared with anyone else.</p>`,
     about: () => `<div class="settings-group">
-      <div class="set-row"><div class="lbl"><b>Cadence</b><span>Version ${esc((S.version || 'dev').slice(0, 7))}</span></div><button class="btn" data-action="check-update">Check for updates</button></div>
+      <div class="set-row"><div class="lbl"><b>Fof Music</b><span>Version ${esc((S.version || 'dev').slice(0, 7))}</span></div><button class="btn" data-action="check-update">Check for updates</button></div>
       <div class="set-row"><div class="lbl"><b>Keyboard shortcuts</b><span>Space play/pause · ← → skip 10s · Shift ← → previous/next · L like · / search · Q up next</span></div></div>
       <div class="set-row"><div class="lbl"><b>Where artwork and lyrics come from</b><span>Artwork and song details: Apple’s public iTunes Search. Lyrics: LRCLIB, a free community lyrics library. Only songs they have are matched.</span></div></div></div>`,
   }[tab]();
@@ -1529,7 +1530,7 @@ function paintNow(t) {
   $('#p-title').textContent = t.title; $('#p-artist').textContent = t.artist;
   $('#now-title').textContent = t.title; $('#now-artist').textContent = t.artist;
   $('#now-artist').href = '#/artist/' + encodeURIComponent(mainArtist(t.artist));
-  $('#now-from').textContent = P.mode === 'flow' ? 'Cadence Flow' : P.context ? 'Playing from ' + P.context : '';
+  $('#now-from').textContent = P.mode === 'flow' ? 'Fof Flow' : P.context ? 'Playing from ' + P.context : '';
   ['#p-like', '#now-like'].forEach(s => $(s).classList.toggle('on', !!t.liked));
   document.title = `${t.title} · ${t.artist}`;
   setNowBg(t.colors);
@@ -1729,7 +1730,7 @@ function renderQueue() {
     ${t ? `<h3>Now playing</h3>${row(t.id, P.idx, false).replace('class="track q"', 'class="track q playing"')}` : ''}
     <div class="q-head"><h3>Up next${P.context && P.mode !== 'flow' ? ' · ' + esc(P.context) : ''}</h3><div class="q-tools">${mine.length ? '<button class="link" data-action="queue-clear">Clear</button>' : ''}<button class="link" data-action="queue-save">Save as playlist</button></div></div>
     <div class="q-list" data-sortable="queue">${mine.map(([id, i]) => row(id, i, true)).join('') || '<p class="q-empty">Nothing queued. Use Play next or Add to queue on any song.</p>'}</div>
-    <div class="autoplay-row"><div><b>${P.mode === 'flow' ? 'Cadence Flow' : P.mode === 'radio' ? 'Radio' : 'Autoplay'}</b><span>${P.mode ? 'Keeps adding songs from your library' : 'Similar songs from your library keep playing when this ends'}</span></div>${P.mode ? `<button class="link" data-action="end-mode">Stop</button>` : `<button class="switch ${S.settings.autoplay ? 'on' : ''}" data-action="toggle-setting" data-key="autoplay" aria-label="Autoplay"></button>`}</div>
+    <div class="autoplay-row"><div><b>${P.mode === 'flow' ? 'Fof Flow' : P.mode === 'radio' ? 'Radio' : 'Autoplay'}</b><span>${P.mode ? 'Keeps adding songs from your library' : 'Similar songs from your library keep playing when this ends'}</span></div>${P.mode ? `<button class="link" data-action="end-mode">Stop</button>` : `<button class="switch ${S.settings.autoplay ? 'on' : ''}" data-action="toggle-setting" data-key="autoplay" aria-label="Autoplay"></button>`}</div>
     ${auto.length ? `<div class="q-list" data-sortable="queue">${auto.map(([id, i]) => row(id, i, true)).join('')}</div>` : ''}
     ${hist.length ? `<details class="q-hist"><summary>History</summary>${hist.map(id => { const x = S.tracks.get(id); return x ? `<div class="track q" data-id="${id}" data-hist="1"><div></div><div class="th"><img loading="lazy" src="${artOf(x)}" alt=""></div><div class="tmain"><div class="tt ellipsis">${esc(x.title)}</div><div class="ta ellipsis">${esc(x.artist)}</div></div><div class="td">${fmt(x.duration)}</div><div></div></div>` : ''; }).join('')}</details>` : ''}
   </div>`;
@@ -1827,7 +1828,7 @@ function trackMenu(e, id) {
 function insertNext(ids) { if (!current()) return playList(ids); P.queue.splice(P.idx + 1, 0, ...ids); ids.forEach(id => P.autoAdded.delete(id)); savePlayer(); P.preloadFor = null; if (P.panel === 'queue') renderQueue(); }
 function addQueue(ids) { if (!current()) return playList(ids); const fa = P.queue.findIndex((id, i) => i > P.idx && P.autoAdded.has(id)); P.queue.splice(fa < 0 ? P.queue.length : fa, 0, ...ids); P.preloadFor = null; savePlayer(); if (P.panel === 'queue') renderQueue(); }
 function radio(id) { const t = S.tracks.get(id); if (!t) return; P.shuffle = false; playList([id, ...similar(t, 20)], 0, { context: `${t.title} Radio`, mode: 'radio', seed: id }); toast(`${t.title} Radio · from your library`); }
-function flow() { const ids = flowPicks(20); if (!ids.length) return toast('Add some music first'); P.shuffle = false; playList(ids, 0, { context: 'Cadence Flow', mode: 'flow' }); toast('Cadence Flow · endless music from your library'); }
+function flow() { const ids = flowPicks(20); if (!ids.length) return toast('Add some music first'); P.shuffle = false; playList(ids, 0, { context: 'Fof Flow', mode: 'flow' }); toast('Fof Flow · endless music from your library'); }
 
 async function like(id) {
   const t = S.tracks.get(id); if (!t) return;
@@ -1941,7 +1942,7 @@ async function removeLocal(id) {
 }
 function confirmDelete(id) {
   const t = S.tracks.get(id);
-  confirmSheet(`Remove “${t.title}”?`, `It’s removed from Cadence${S.user && t.cloud ? ' on all your devices' : ''}. The original file on your computer is not touched.`, 'Remove', async () => {
+  confirmSheet(`Remove “${t.title}”?`, `It’s removed from Fof Music${S.user && t.cloud ? ' on all your devices' : ''}. The original file on your computer is not touched.`, 'Remove', async () => {
     await removeLocal(id);
     for (const p of S.playlists.values()) if (p.tracks.includes(id)) { p.tracks = p.tracks.filter(x => x !== id); savePlaylist(p); }
     if (S.user && t.cloud) cloud.deleteTrack(id).catch(syncFailed);
@@ -2052,7 +2053,7 @@ async function uploadLocal({ quiet = false } = {}) {
   if (n || !quiet) toast(`${count(n)} now on all your devices`); render();
 }
 function exportData() {
-  const data = { exportedAt: new Date().toISOString(), app: 'Cadence', songs: [...S.tracks.values()].map(({ colors, ...t }) => t), playlists: [...S.playlists.values()], listeningLog: S.log, recentlyPlayed: S.history, settings: S.settings };
+  const data = { exportedAt: new Date().toISOString(), app: 'Fof Music', songs: [...S.tracks.values()].map(({ colors, ...t }) => t), playlists: [...S.playlists.values()], listeningLog: S.log, recentlyPlayed: S.history, settings: S.settings };
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
   a.download = `cadence-export-${new Date().toISOString().slice(0, 10)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
@@ -2060,6 +2061,20 @@ function exportData() {
 /* =====================================================================
    Events
    ===================================================================== */
+// Small taps you can feel. Android uses vibrate; iPhone (iOS 18+) gives a tick when a switch control is toggled.
+const haptic = (() => {
+  if (navigator.vibrate) return () => { try { navigator.vibrate(8); } catch {} };
+  const lab = document.createElement('label'); lab.setAttribute('aria-hidden', 'true');
+  lab.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden;left:-10px;top:0';
+  const sw = document.createElement('input'); sw.type = 'checkbox'; sw.setAttribute('switch', ''); sw.tabIndex = -1;
+  lab.appendChild(sw); document.body.appendChild(lab);
+  return () => { try { lab.click(); } catch {} };
+})();
+const HAPTIC = new Set(['toggle', 'next', 'prev', 'like-current', 'like', 'shuffle', 'repeat', 'play-track', 'close-now', 'open-now']);
+// AirPlay: Safari can hand the audio to an Apple TV, a Fire TV with AirPlay, or a speaker.
+if (window.WebKitPlaybackTargetAvailabilityEvent) {
+  for (const el of [$('#audio'), $('#audio-b')]) el.addEventListener('webkitplaybacktargetavailabilitychanged', e => { if (e.availability === 'available') $('#airplay-btn').hidden = false; });
+}
 document.addEventListener('click', async e => {
   if (S.justDragged && Date.now() - S.justDragged < 300) return;
   const a = e.target.closest('[data-action]');
@@ -2070,8 +2085,10 @@ document.addEventListener('click', async e => {
     if (a.tagName !== 'INPUT') e.preventDefault();
     e.stopPropagation();
     const id = a.dataset.id;
+    if (HAPTIC.has(a.dataset.action)) haptic();
     switch (a.dataset.action) {
       case 'noop': return;
+      case 'airplay': try { engine.el.webkitShowPlaybackTargetPicker(); } catch { toast('AirPlay isn’t available here'); } return;
       case 'toggle': return toggle();
       case 'next': return next();
       case 'prev': return prev();
@@ -2268,7 +2285,7 @@ window.addEventListener('pagehide', () => { flushListen(); savePlayer(true); });
     if (x0 === null) return;
     const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
     if (dy < -40 && Math.abs(dx) < 50) openNow();
-    else if (Math.abs(dx) > 60 && Math.abs(dy) < 40) { pl.classList.add(dx < 0 ? 'swipe-l' : 'swipe-r'); setTimeout(() => pl.classList.remove('swipe-l', 'swipe-r'), 300); dx < 0 ? next() : prev(); }
+    else if (Math.abs(dx) > 60 && Math.abs(dy) < 40) { pl.classList.add(dx < 0 ? 'swipe-l' : 'swipe-r'); setTimeout(() => pl.classList.remove('swipe-l', 'swipe-r'), 300); haptic(); dx < 0 ? next() : prev(); }
   }, { passive: true });
 })();
 // swipe down to close the full player on phones

@@ -1,4 +1,4 @@
-# Cadence
+# Fof Music
 
 A personal music app: your own songs, beautifully presented, on every device.
 

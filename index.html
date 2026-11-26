@@ -7,8 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Cadence">
-<title>Cadence</title>
+<meta name="apple-mobile-web-app-title" content="Fof Music">
+<title>Fof Music</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
@@ -19,7 +19,7 @@
 <div id="backdrop" aria-hidden="true"><div class="bd on"></div><div class="bd"></div><div class="bd-grain"></div></div>
 <div id="app">
   <aside class="sidebar">
-    <div class="brand"><img src="icons/icon.svg" alt=""><span>Cadence</span></div>
+    <div class="brand"><img src="icons/icon.svg" alt=""><span>Fof Music</span></div>
     <nav>
       <a data-route="home" href="#/home" class="nav-link"><svg><use href="#i-home"/></svg>Home</a>
       <a data-route="search" href="#/search" class="nav-link"><svg><use href="#i-search"/></svg>Search</a>
@@ -39,7 +39,7 @@
     </div>
   </aside>
 
-  <main id="main"><div class="folder-bar" id="folder-bar" hidden><span>Let Cadence look for new songs in your folder</span><button data-action="scan-folder">Allow</button></div><div id="view"></div></main>
+  <main id="main"><div class="folder-bar" id="folder-bar" hidden><span>Let Fof Music look for new songs in your folder</span><button data-action="scan-folder">Allow</button></div><div id="view"></div></main>
 
   <footer id="player" class="player empty">
     <div class="p-track" data-action="open-now">
@@ -66,17 +66,20 @@
     <div class="mini-progress"><div id="p-mini-bar"></div></div>
   </footer>
 
-  <nav class="tabbar">
-    <a data-route="home" href="#/home"><svg><use href="#i-home"/></svg><span>Home</span></a>
-    <a data-route="search" href="#/search"><svg><use href="#i-search"/></svg><span>Search</span></a>
-    <a data-route="library" href="#/library"><svg><use href="#i-library"/></svg><span>Library</span></a>
-    <a data-route="import" href="#/import"><svg><use href="#i-upload"/></svg><span>Add</span></a>
-  </nav>
+  <div class="tabdock">
+    <nav class="tabbar">
+      <a data-route="home" href="#/home"><svg><use href="#i-home"/></svg><span>Home</span></a>
+      <a data-route="library" href="#/library"><svg><use href="#i-grid"/></svg><span>Library</span></a>
+      <a data-route="import" href="#/import"><svg><use href="#i-upload"/></svg><span>Add</span></a>
+    </nav>
+    <a class="tab-search" data-route="search" href="#/search" aria-label="Search"><svg><use href="#i-search"/></svg></a>
+  </div>
 </div>
 
 <section id="now" class="now" aria-hidden="true">
   <div class="now-bg" id="now-bg"><div class="bgl on"></div><div class="bgl"></div></div>
   <header class="now-head">
+    <button class="now-grab" data-action="close-now" aria-label="Close"></button>
     <button class="icon-btn" data-action="close-now" aria-label="Close"><svg><use href="#i-down"/></svg></button>
     <div class="now-from muted" id="now-from"></div>
     <div class="now-head-r"><button class="icon-btn" id="lyrics-expand" data-action="lyrics-full" aria-label="Full-screen lyrics"><svg><use href="#i-expand"/></svg></button><button class="icon-btn" data-action="track-menu-current" aria-label="More"><svg><use href="#i-more"/></svg></button></div>
@@ -102,6 +105,7 @@
       <div class="now-tools">
         <button class="pill-btn" data-action="tab-lyrics" id="tab-lyrics"><svg><use href="#i-quote"/></svg>Lyrics</button>
         <button class="pill-btn" data-action="tab-queue" id="tab-queue"><svg><use href="#i-queue"/></svg>Up next</button>
+        <button class="pill-btn" data-action="airplay" id="airplay-btn" hidden><svg><use href="#i-airplay"/></svg><span>AirPlay</span></button>
         <button class="pill-btn" data-action="speed" id="speed-btn">1×</button>
         <button class="pill-btn" data-action="sleep" id="sleep-btn"><svg><use href="#i-moon"/></svg><span>Sleep</span></button>
       </div>
@@ -112,7 +116,7 @@
 
 <div id="sheet-root"></div>
 <div id="toast" class="toast"></div>
-<div id="update-bar" class="update-bar"><span>A new version of Cadence is ready.</span><button data-action="apply-update">Update</button></div>
+<div id="update-bar" class="update-bar"><span>A new version of Fof Music is ready.</span><button data-action="apply-update">Update</button></div>
 <input type="file" id="file-input" multiple accept="audio/*,.mp3,.m4a,.flac,.wav,.aac,.ogg,.opus" hidden>
 <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
 <input type="file" id="art-input" accept="image/*" hidden>
@@ -157,6 +161,8 @@
     <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="m16 9.5 5 5m0-5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
     <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2.2"/><rect x="13" y="3" width="8" height="8" rx="2.2"/><rect x="3" y="13" width="8" height="8" rx="2.2"/><rect x="13" y="13" width="8" height="8" rx="2.2"/></symbol>
+    <symbol id="i-airplay" viewBox="0 0 24 24"><path d="M6 17H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 14.5 17 21H7z"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   </defs>
 </svg>
