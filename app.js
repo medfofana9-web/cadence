@@ -238,7 +238,7 @@ async function boot() {
   checkVersion();
   setInterval(checkVersion, 10 * 60 * 1000);
   // new songs saved to the connected folder show up within a couple of minutes, even mid-song
-  setInterval(() => { if (S.folder && S.folderState !== 'needs-permission' && !IMP.running) scanFolder(); }, 2 * 60 * 1000);
+  setInterval(() => { if (S.folder && S.folderState !== 'needs-permission' && !IMP.running) scanFolder(); }, 30 * 1000);
   // songs that couldn't upload earlier (bad Wi-Fi, signed out) go up on their own
   setInterval(() => autoUpload(), 5 * 60 * 1000);
   setTimeout(autoOffline, 20000); setInterval(autoOffline, 15 * 60 * 1000);
@@ -1274,7 +1274,7 @@ async function importFiles(files, { retry = false, background = false } = {}) {
   if (S.route === 'import') render(); else if (background) toast(`Adding ${count(jobs.length)} from your folder…`);
   const queue = [...jobs];
   const known = { hashes: new Set([...S.tracks.values()].map(t => t.hash).filter(Boolean)), keys: new Map([...S.tracks.values()].map(t => [meta.dupKey(t), t])) };
-  await Promise.all(Array.from({ length: 3 }, async () => {
+  await Promise.all(Array.from({ length: IS_IOS ? 3 : 6 }, async () => {
     while (queue.length && !IMP.cancel) {
       const j = queue.shift();
       try { const r = await importOne(j, known); if (r === 'skip') IMP.skipped++; else { IMP.added++; if (r === 'maybe') IMP.maybeDup++; } }
