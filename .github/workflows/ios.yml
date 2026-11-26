@@ -1,0 +1,94 @@
+name: Build iPhone app
+
+# Builds the Fof Music iPhone shell (mobile/) and publishes it for SideStore.
+# The app loads the live Fof Music site, so everyday changes need no new build; this only runs when mobile/ changes.
+on:
+  push:
+    branches: [main]
+    paths: ['mobile/**', '.github/workflows/ios.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare the app
+        working-directory: mobile
+        run: |
+          V="1.0.${{ github.run_number }}"
+          echo "V=$V" >> "$GITHUB_ENV"
+          npm install --no-audit --no-fund
+          npx cap sync ios
+      - name: Build for iPhone (unsigned; SideStore signs it on the phone)
+        working-directory: mobile/ios/App
+        run: |
+          set -o pipefail
+          xcodebuild -project App.xcodeproj -scheme App -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build MARKETING_VERSION="$V" CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tail -25
+          mkdir -p Payload && cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qry FofMusic.ipa Payload && ls -la FofMusic.ipa
+      - name: Try it in the iPhone simulator
+        working-directory: mobile/ios/App
+        continue-on-error: true
+        run: |
+          xcodebuild -project App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath simbuild CODE_SIGNING_ALLOWED=NO build | tail -5
+          DEV=$(xcrun simctl list devices available | grep -m1 -E 'iPhone 1[5-7]( Pro)? \(' | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+          xcrun simctl boot "$DEV"; xcrun simctl bootstatus "$DEV" -b
+          xcrun simctl install "$DEV" simbuild/Build/Products/Debug-iphonesimulator/App.app
+          xcrun simctl launch "$DEV" com.fof.music.ios
+          sleep 30; mkdir -p shots; xcrun simctl io "$DEV" screenshot shots/launch.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-build
+          path: |
+            mobile/ios/App/FofMusic.ipa
+            mobile/ios/App/shots
+      - name: Publish for SideStore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: mobile/ios/App
+        run: |
+          R="${{ github.repository }}"
+          SIZE=$(stat -f%z FofMusic.ipa)
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          cat > sidestore-source.json <<JSON
+          {
+            "name": "Fof Music",
+            "identifier": "com.fof.music.source",
+            "sourceURL": "https://github.com/$R/releases/download/ios/sidestore-source.json",
+            "apps": [{
+              "name": "Fof Music",
+              "bundleIdentifier": "com.fof.music.ios",
+              "developerName": "Fof",
+              "subtitle": "Your music, on your iPhone",
+              "localizedDescription": "Fof Music: your own songs, playlists and podcasts, with background playback and lock-screen controls.",
+              "iconURL": "https://raw.githubusercontent.com/$R/main/icons/icon-512.png",
+              "tintColor": "#E50914",
+              "versions": [{
+                "version": "$V",
+                "date": "$DATE",
+                "downloadURL": "https://github.com/$R/releases/download/ios/FofMusic.ipa",
+                "size": $SIZE,
+                "minOSVersion": "15.0"
+              }],
+              "appPermissions": { "entitlements": [], "privacy": {} }
+            }],
+            "news": []
+          }
+          JSON
+          gh release view ios -R "$R" >/dev/null 2>&1 || gh release create ios -R "$R" --title "Fof Music for iPhone" --notes "Add this to SideStore: https://github.com/$R/releases/download/ios/sidestore-source.json" --latest=false
+          gh release upload ios FofMusic.ipa sidestore-source.json -R "$R" --clobber

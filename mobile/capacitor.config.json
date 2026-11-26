@@ -1,0 +1,16 @@
+{
+  "appId": "com.fof.music.ios",
+  "appName": "Fof Music",
+  "webDir": "www",
+  "server": {
+    "url": "https://medfofana9-web.github.io/cadence/",
+    "allowNavigation": ["medfofana9-web.github.io"]
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#09090a",
+    "allowsLinkPreview": false,
+    "appendUserAgent": "FofMusicApp",
+    "scheme": "Fof Music"
+  }
+}

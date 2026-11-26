@@ -5,6 +5,8 @@ import * as cloud from './lib/cloud.js';
 import { Engine, IS_IOS } from './lib/engine.js';
 import { Index, fold } from './lib/search.js';
 import { thumbnail, artColors } from './lib/image.js';
+/** Running inside the Fof Music iPhone app rather than a browser. */
+const IN_APP = !!window.Capacitor?.isNativePlatform?.() || /FofMusicApp/.test(navigator.userAgent);
 
 /* =====================================================================
    State
@@ -202,7 +204,7 @@ async function boot() {
     P.played = (saved.played || []).filter(id => S.tracks.has(id));
     if (P.idx >= 0 && P.queue.length) { const ok = await loadTrack(P.queue[P.idx], { autoplay: false, quiet: true }); if (ok && saved.time) seekWhenReady(saved.time); }
   }
-  if (/iP(hone|ad|od)/.test(navigator.userAgent) && !navigator.standalone) { document.documentElement.classList.add('ios-browser'); try { if (!localStorage.getItem('cadence-a2hs')) { localStorage.setItem('cadence-a2hs', '1'); setTimeout(() => toast('For full screen: tap Share, then Add to Home Screen'), 2500); } } catch {} }
+  if (/iP(hone|ad|od)/.test(navigator.userAgent) && !navigator.standalone && !IN_APP) { document.documentElement.classList.add('ios-browser'); try { if (!localStorage.getItem('cadence-a2hs')) { localStorage.setItem('cadence-a2hs', '1'); setTimeout(() => toast('For full screen: tap Share, then Add to Home Screen'), 2500); } } catch {} }
   renderSidebar();
   listenToOtherTabs();
   window.addEventListener('hashchange', route);
@@ -220,6 +222,16 @@ async function boot() {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkVersion(); if (S.folder && Date.now() - (S.lastScan || 0) > 30000) scanFolder(); if (S.user && Date.now() - S.lastSync > 60000) syncDown(); } else { flushListen(); savePlayer(true); } });
   window.addEventListener('online', () => { if (S.user) { syncDown(); setTimeout(autoUpload, 5000); } });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (IN_APP) renewReminder();
+}
+/** The installed iPhone app (SideStore). Free signing lasts 7 days: SideStore renews it, and this is the backup reminder. */
+async function renewReminder() {
+  const nat = window.Capacitor?.Plugins?.FofNative; if (!nat) return;
+  try {
+    const i = await nat.info(); if (!i?.expires) return;
+    const left = (new Date(i.expires) - Date.now()) / 864e5; if (left > 2) return;
+    toast(`Fof Music needs a refresh ${left < 1 ? 'today' : `in ${Math.ceil(left)} days`} or it stops opening`, ['Renew', () => nat.openSideStore()]);
+  } catch {}
 }
 function seekWhenReady(t) { const el = engine.el; const go_ = () => { try { el.currentTime = t; } catch {} onTime(); }; el.readyState >= 1 ? go_() : el.addEventListener('loadedmetadata', go_, { once: true }); }
 
