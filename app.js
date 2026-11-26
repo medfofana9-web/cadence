@@ -2020,25 +2020,66 @@ for (const el of engine.els) {
 }
 function bindSeek(sel) {
   const r = $(sel);
-  r.addEventListener('input', () => { seeking = true; paintRange(r); const d = engine.el.duration || 0; $('#p-cur').textContent = $('#now-cur').textContent = fmt(r.value / 1000 * d); });
-  r.addEventListener('change', () => { const d = engine.el.duration || 0; engine.el.currentTime = r.value / 1000 * d; seeking = false; if (P.resumeId === current()?.id) P.resumeAt = 0; setTimeout(() => savePlayer(true), 300); if (P.lyrics?.lines) syncLyrics(engine.el.currentTime, true); });
+  let drag = null;
+  const duration = () => {
+    const d = engine.el.duration;
+    return Number.isFinite(d) && d > 0 ? d : 0;
+  };
+  const preview = () => {
+    seeking = true;
+    paintRange(r);
+    const d = duration(), time = r.valueAsNumber / 1000 * d;
+    $('#p-cur').textContent = $('#now-cur').textContent = fmt(time);
+    $('#p-dur').textContent = $('#now-dur').textContent = '-' + fmt(d - time);
+  };
+  const commit = () => {
+    seeking = false;
+    const d = duration();
+    if (d) {
+      if (P.resumeId === current()?.id) P.resumeAt = 0;
+      engine.el.currentTime = r.valueAsNumber / 1000 * d;
+      setTimeout(() => savePlayer(true), 300);
+      if (P.lyrics?.lines) syncLyrics(engine.el.currentTime, true);
+    }
+    paintTime();
+  };
+  const move = e => {
+    const bounds = r.getBoundingClientRect();
+    r.value = Math.round(Math.max(0, Math.min(1, (e.clientX - bounds.left) / bounds.width)) * 1000);
+    preview();
+  };
+  const finish = e => {
+    if (drag?.pointerId !== e.pointerId) return;
+    const shouldSeek = e.type === 'pointerup' && drag.track === current()?.id &&
+      drag.el === engine.el && drag.src === engine.el.getAttribute('src');
+    drag = null;
+    r.classList.remove('dragging');
+    if (shouldSeek) {
+      move(e);
+      commit();
+      haptic();
+    } else {
+      seeking = false;
+      paintTime();
+    }
+  };
+  r.addEventListener('input', preview);
+  r.addEventListener('change', commit);
+  r.addEventListener('blur', () => {
+    if (!drag && seeking) { seeking = false; paintTime(); }
+  });
+  r.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' || !e.isPrimary || !duration()) return;
+    try { r.setPointerCapture(e.pointerId); } catch { return; }
+    e.preventDefault();
+    drag = { pointerId: e.pointerId, track: current()?.id, el: engine.el, src: engine.el.getAttribute('src') };
+    r.classList.add('dragging');
+    move(e);
+  });
+  r.addEventListener('pointermove', e => { if (drag?.pointerId === e.pointerId) move(e); });
+  for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) r.addEventListener(event, finish);
 }
 bindSeek('#p-seek'); bindSeek('#now-seek');
-function dragSeek(sel) {
-  const r = $(sel);
-  const at = x => { const b = r.getBoundingClientRect(); return Math.min(1, Math.max(0, (x - b.left) / b.width)); };
-  r.addEventListener('pointerdown', e => {
-    if (e.pointerType === 'mouse') return;
-    e.preventDefault(); try { r.setPointerCapture(e.pointerId); } catch {}
-    r.classList.add('dragging');
-    const set = ev => { r.value = Math.round(at(ev.clientX) * 1000); r.dispatchEvent(new Event('input')); };
-    set(e);
-    const mv = ev => set(ev);
-    const up = () => { r.removeEventListener('pointermove', mv); r.removeEventListener('pointerup', up); r.removeEventListener('pointercancel', up); r.classList.remove('dragging'); r.dispatchEvent(new Event('change')); haptic(); };
-    r.addEventListener('pointermove', mv); r.addEventListener('pointerup', up); r.addEventListener('pointercancel', up);
-  });
-}
-dragSeek('#now-seek'); dragSeek('#p-seek');
 $('#p-vol').addEventListener('input', e => { const v = e.target.value / 100; engine.setVolume(v); paintRange(e.target); S.settings.volume = v; clearTimeout(e.target._t); e.target._t = setTimeout(() => kv.set('settings', S.settings), 300); $('#vol-icon use').setAttribute('href', v === 0 ? '#i-mute' : '#i-vol'); });
 
 let npArtKey = '', npArtData = '';

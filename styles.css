@@ -392,6 +392,7 @@ input[type=range]:hover::-moz-range-thumb,.setting-range::-moz-range-thumb{opaci
 #now-artist:hover{color:#fff;text-decoration:underline}
 .now .like-btn{color:rgba(255,255,255,.8)}.now .like-btn.on{color:var(--accent)}
 .now-progress{margin-top:20px}
+.seek{touch-action:none}
 .now-progress .seek{width:100%}
 .now-progress input[type=range]::-webkit-slider-runnable-track{height:5px;background:linear-gradient(to right,rgba(255,255,255,.92) var(--p),rgba(255,255,255,.22) var(--p))}
 .now-progress input[type=range]::-moz-range-track{height:5px;background:linear-gradient(to right,rgba(255,255,255,.92) var(--p),rgba(255,255,255,.22) var(--p))}
@@ -914,7 +915,7 @@ html[data-theme=light],[data-theme=light] body,[data-theme=light] #backdrop{back
   .now-progress input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px}
   .now-progress input[type=range]::-webkit-slider-thumb{opacity:0}
   .now-progress input[type=range]:active::-webkit-slider-runnable-track,.now-progress input[type=range].dragging::-webkit-slider-runnable-track{height:10px;border-radius:5px}
-  .now-progress input[type=range]{touch-action:none;height:30px;margin:-12px 0 -6px}
+  .now-progress input[type=range]{height:30px;margin:-12px 0 -6px}
   .now-times{font-size:11px;font-weight:600;color:rgba(255,255,255,.5)}
   .now-controls{grid-template-columns:1fr auto auto auto 1fr}
   #now-shuffle,#now-repeat{visibility:hidden}
