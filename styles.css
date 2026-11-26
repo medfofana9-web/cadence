@@ -1110,3 +1110,60 @@ button.set-row{width:100%;text-align:left}
 .switch::after{width:27px;height:27px;top:2px;left:2px}
 .switch.on::after{transform:translateX(20px)}
 .settings-tabs,.seg-scroll{scrollbar-width:none}
+
+/* ===== Quran, part 2 ===== */
+.q-c-bar{height:3px;border-radius:2px;background:rgba(255,255,255,.2);margin-top:8px;max-width:260px}
+[data-theme=light] .q-c-bar{background:rgba(0,0,0,.12)}
+.q-c-bar i{display:block;height:100%;border-radius:2px;background:currentColor}
+.q-daily{display:block;padding:16px 18px;border-radius:18px;background:var(--surface);margin-bottom:18px}
+.q-daily-ref{font-size:12.5px;color:var(--muted);margin-bottom:6px}
+.q-daily-ar{font-family:"Geeza Pro","Noto Naskh Arabic","Amiri",serif;font-size:24px;line-height:1.9;text-align:right}
+.q-daily-en{font-size:15px;line-height:1.5;color:var(--text-2);margin-top:4px}
+.q-seg{display:flex;width:100%;margin:18px 0 12px;flex-wrap:nowrap}
+.q-seg button{flex:1;text-align:center}
+.q-search{display:block;margin-bottom:12px}
+.q-row .chev{margin-left:auto}
+.q-saved{display:block;padding:14px 18px;border-top:1px solid var(--line)}
+.q-saved:first-child{border-top:0}
+.q-saved-ref{font-size:12.5px;color:var(--muted);font-weight:600}
+.q-saved-ar{font-family:"Geeza Pro","Noto Naskh Arabic","Amiri",serif;font-size:22px;line-height:1.9;text-align:right;margin-top:4px}
+.q-saved-en{font-size:14.5px;color:var(--text-2);line-height:1.45;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.q-view{display:inline-flex;margin-top:16px}
+.q-note{margin-top:12px;font-size:14px}
+.q-orn{color:#c9a95c;font-size:.78em;white-space:nowrap}
+.q-v{position:relative}
+.q-v-saved{position:absolute;left:12px;top:14px;color:var(--accent)}
+.q-v-saved svg{width:14px;height:14px}
+.q-v.flash,.q-pv.flash{animation:qflash 1.6s ease}
+@keyframes qflash{0%,40%{background:rgba(201,169,92,.3)}100%{background:transparent}}
+.mem-hide .q-v.on .q-v-ar,.mem-hide .q-pv.on{filter:blur(9px);transition:filter .3s}
+.q-pages{max-width:640px;margin:0 auto}
+.q-page{padding:18px 18px 26px;border-radius:18px;background:var(--surface);margin-bottom:16px}
+.q-page-top{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-bottom:12px}
+.q-banner{text-align:center;font-family:"Geeza Pro","Noto Naskh Arabic","Amiri",serif;font-size:24px;color:#d9c48f;border:1px solid rgba(201,169,92,.45);border-radius:12px;padding:6px;margin-bottom:10px}
+.q-flow{font-family:"Geeza Pro","Noto Naskh Arabic","Amiri",serif;font-size:26px;line-height:2.25;text-align:justify;text-align-last:center}
+.q-pv{border-radius:8px;padding:2px 3px;cursor:pointer;transition:background .3s;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+.q-pv.on{background:rgba(201,169,92,.22)}
+.q-recs .q-rec{display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid var(--line);cursor:pointer}
+.q-recs .q-rec:first-child{border-top:0}
+.q-av{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-weight:600;font-size:14px;flex:none}
+.q-av.big{width:96px;height:96px;font-size:30px}
+.q-rec-main{flex:1;min-width:0;display:flex;flex-direction:column}
+.q-rec-main b{font-weight:600;font-size:15.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-rec-main em{font-style:normal;font-size:12.5px;color:var(--muted)}
+.q-sample{color:var(--muted)}.q-sample.on{color:var(--accent)}
+.q-check{width:18px;height:18px;color:var(--accent);flex:none}
+.q-tiles{gap:16px}
+.q-tile{flex:none;width:104px;display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;text-align:center}
+.q-tile span:last-child{font-size:13px;line-height:1.25;font-weight:550}
+.q-tile.on .q-av{box-shadow:0 0 0 3px var(--accent)}
+.q-vs-ref{font-size:13px;color:var(--muted);font-weight:600}
+.q-vs-ar{font-family:"Geeza Pro","Noto Naskh Arabic","Amiri",serif;font-size:26px;line-height:2;text-align:right;margin:8px 0 4px}
+.q-vs-en{font-size:15.5px;line-height:1.5;color:var(--text-2);margin-bottom:16px}
+.q-vs-acts .set-row svg{width:18px;height:18px;color:var(--accent)}
+.stepper{display:inline-flex;align-items:center;background:var(--surface-3);border-radius:9px;overflow:hidden}
+.stepper button{width:38px;height:32px;font-size:19px;color:var(--text)}
+.stepper b{min-width:46px;text-align:center;font-weight:600;font-variant-numeric:tabular-nums;font-size:14.5px}
+.mem-sum{margin:10px 4px 0}
+#mem-sheet .set-row{padding:11px 16px}
+label.search-box{display:block}

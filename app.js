@@ -190,7 +190,7 @@ function queueStatePush() {
   clearTimeout(pushT);
   pushT = setTimeout(() => {
     const { volume, ...settings } = S.settings;
-    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes, pod: { subs: S.pod.subs, prog: S.pod.prog }, eps: Object.keys(S.pod.prog).slice(-150).map(id => S.ext.get(id)).filter(Boolean).map(({ path, local, ...e }) => e), quran: S.quranSpot || null }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
+    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes, pod: { subs: S.pod.subs, prog: S.pod.prog }, eps: Object.keys(S.pod.prog).slice(-150).map(id => S.ext.get(id)).filter(Boolean).map(({ path, local, ...e }) => e), quran: S.quranSpot || null, quranSaved: S.quranSaved || [] }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
   }, 4000);
 }
 
@@ -208,6 +208,7 @@ async function boot() {
   for (const t of await kv.get('ext', [])) S.ext.set(t.id, t);
   S.pod = await kv.get('pod', { subs: [], prog: {}, saved: {} });
   S.quranSpot = await kv.get('quranSpot', null);
+  S.quranSaved = await kv.get('quranSaved', []);
   for (const [id, p] of pls) S.playlists.set(id, p);
   for (const [id, b] of arts) (id.startsWith('pl:') ? S.plCovers : S.art).set(id.replace(/^pl:/, ''), URL.createObjectURL(b));
   for (const [id, b] of thumbs) S.thumbs.set(id, URL.createObjectURL(b));
@@ -341,6 +342,7 @@ function mergeState(d) {
     S.pod = { ...S.pod, subs, prog }; kv.set('pod', S.pod);
   }
   for (const e of d.eps || []) if (!S.ext.has(e.id)) S.ext.set(e.id, e);
+  if (d.quranSaved) { const m = new Map((S.quranSaved || []).map(x => [x.s + ':' + x.v, x])); for (const x of d.quranSaved) if (!m.has(x.s + ':' + x.v)) m.set(x.s + ':' + x.v, x); S.quranSaved = [...m.values()]; kv.set('quranSaved', S.quranSaved); }
   if (d.quran && (d.quran.at || 0) > (S.quranSpot?.at || 0)) { S.quranSpot = d.quran; kv.set('quranSpot', S.quranSpot); }
   kv.set('log', S.log); kv.set('history', S.history); kv.set('ctxs', S.ctxs); kv.set('dupIgnore', S.dupIgnore);
 }
@@ -440,6 +442,7 @@ function afterRender() {
   if (S.route === 'search') refreshDiscover();
   if (S.route === 'import') bindImport();
   if (S.route === 'podcasts') bindPodSearch();
+  if (S.route === 'quran' || S.route === 'reciters') bindQuran();
   paintTime();
   requestAnimationFrame(() => $$('.shelf').forEach(sh => sh.closest('.section')?.classList.toggle('fits', sh.scrollWidth <= sh.clientWidth + 4)));
   renderBadge();
@@ -785,7 +788,7 @@ VIEWS.home = () => {
       <h1 class="ellipsis">${cur ? '<span class="eq hero-eq"><i></i><i></i><i></i></span>' : ''}${esc(hero.title)}</h1><div class="sub ellipsis">${esc(hero.artist)}${hero.album ? ' · ' + esc(hero.album) : ''}</div>
       ${cur ? '<div class="hero-progress"><i id="hero-bar"></i></div>' : ''}
       <div class="row-actions">${cur ? `<button class="btn primary" data-action="toggle"><span class="when-playing"><svg><use href="#i-pause"/></svg>Pause</span><span class="when-paused"><svg><use href="#i-play"/></svg>${resumeAt ? `Resume at ${fmt(resumeAt)}` : 'Resume'}</span></button>` : `<button class="btn primary" data-play-list="${heroKey}" data-i="0"><svg><use href="#i-play"/></svg>Play</button>`}
-      <button class="btn ghost" data-action="radio" data-id="${hero.id}"><svg><use href="#i-radio"/></svg>Song radio</button></div></div>
+      ${hero.kind === 'ayah' || hero.kind === 'surahrec' ? `<a class="btn ghost" href="#/quran/${hero.surah}"><svg><use href="#i-quran"/></svg>Open reader</a>` : hero.kind === 'episode' ? `<a class="btn ghost" href="#/show/${hero.showId}"><svg><use href="#i-podcast"/></svg>Show</a>` : `<button class="btn ghost" data-action="radio" data-id="${hero.id}"><svg><use href="#i-radio"/></svg>Song radio</button>`}</div></div>
   </section>
   ${(() => { const n = reviewList().length; return n ? `<a class="check-banner" href="#/review"><div class="cb-stack">${reviewList().slice(0, 3).map(t => `<img src="${artOf(t)}" alt="">`).join('')}</div><div><b>${count(n)} to check</b><span>Quick look at names Fof Music wasn’t sure about</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''; })()}
   ${ctxTiles.length ? `<section class="section"><div class="section-head"><h2>Jump back in</h2></div><div class="tiles">${ctxTiles.join('')}</div></section>` : ''}
@@ -1919,7 +1922,7 @@ function paintTime() {
 function onTime() {
   const el = engine.el, d = el.duration || 0, c = el.currentTime || 0;
   if (!el.paused && Date.now() - lastSpotSave > 5000) { lastSpotSave = Date.now(); savePlayer(true); } // the spot survives the app being closed
-  paintTime();
+  paintTime(); qTick(c);
   const t = current();
   if (P.listen && !el.paused) { const now = performance.now(); if (P.tick) P.listen.s += Math.min((now - P.tick) / 1000, 1.5); P.tick = now; }
   if (t && !t.ext && !P.counted && d && c > Math.min(30, d * .5)) { P.counted = true; t.plays = (t.plays || 0) + 1; t.lastPlayed = Date.now(); saveTrack(t); addHistory(t.id); }
@@ -1929,7 +1932,7 @@ function onTime() {
   if (!engine.dual && c > 4 && !el.paused && navigator.onLine) prefetchNext();
   // gapless / crossfade: buffer the next song near the end, then switch
   const remain = d - c;
-  const cf = engine.dual ? (S.settings.crossfade || (P.mode === 'flow' && S.settings.flowBlend !== false ? 6 : 0)) : 0;
+  const cf = engine.dual && !current()?.ext ? (S.settings.crossfade || (P.mode === 'flow' && S.settings.flowBlend !== false ? 6 : 0)) : 0;
   if (engine.dual && (S.settings.gapless || cf) && d && remain < Math.max(cf + 10, 15) && P.repeat !== 'one' && !P.sleepEnd && !el.paused) {
     const n = peekNext();
     if (n && P.preloadFor !== n.id) {
@@ -1953,6 +1956,7 @@ for (const el of engine.els) {
   el.addEventListener('waiting', mine(() => $('#player').classList.add('buffering')));
   el.addEventListener('playing', mine(() => $('#player').classList.remove('buffering')));
   el.addEventListener('ended', mine(() => {
+    if (P.mem && current()?.kind === 'ayah') { memStep(); return; }
     { const t = current(); if (t?.kind === 'episode') podProgress(t, el.duration, el.duration); }
     if (P.sleepEnd) { clearSleep(); toast('Sleep timer ended'); return; }
     if (P.repeat === 'one') return next(true);
@@ -2109,8 +2113,8 @@ async function renderPanel() {
   $('#lyrics-expand').hidden = P.panel !== 'lyrics';
   if (P.panel === 'queue') { $('#lyrics-return').hidden = true; return renderQueue(); }
   const t = current(); if (!t) return;
-  if (t.kind === 'ayah') {
-    const a = (QR.text.get(t.surah + reciter()) || []).find(x => x.g === t.g);
+  if (t.kind === 'ayah' || t.kind === 'surahrec') {
+    const cv = curVerse(), a = QR.text.get(cv.s)?.[cv.v - 1]; if (!a) qTextNow(cv.s).then(() => renderPanel()).catch(() => {});
     box.innerHTML = a ? `<div class="lyrics q-now"><p class="q-now-ar" dir="rtl" lang="ar">${esc(a.ar)}</p><p class="q-now-en">${esc(a.en)}</p><div class="lyrics-credit">Translation: Saheeh International</div></div>` : '';
     $('#lyrics-return').hidden = true; return;
   }
@@ -2588,9 +2592,19 @@ document.addEventListener('click', async e => {
       case 'eq-preset': return setEQ(id);
       case 'q-play': { const [n, v] = id.split(':').map(Number); const cur = current(); if (cur?.kind === 'ayah' && cur.surah === n && cur.n === v) return toggle(); return qPlay(n, v); }
       case 'q-resume': return qResume();
-      case 'q-tr': QR.translit = !QR.translit; return render();
-      case 'q-reciter': return qReciterSheet();
-      case 'q-set-reciter': { S.settings.reciter = id; await saveSettings(); closeSheet(); toast(reciterName()); return render(); }
+      case 'q-set-reciter': return qSetReciter(id);
+      case 'q-sample': e.stopPropagation(); return qSample(id);
+      case 'q-tab': QR.tab = id; return render();
+      case 'q-rf': QR.rf = id; return render();
+      case 'q-view': S.settings.qView = id; saveSettings(); return render();
+      case 'q-verse': { const [n, v] = id.split(':').map(Number); return qVerseSheet(n, v); }
+      case 'q-rep': { const [n, v] = id.split(':').map(Number); QR.memDraft = { s: n, from: v, to: v, each: 3, range: 1, gap: 1, speed: 1, hide: false }; return memStart(); }
+      case 'q-save': { const [n, v] = id.split(':').map(Number); return qSave(n, v); }
+      case 'q-copy': { const [n, v] = id.split(':').map(Number); try { await navigator.clipboard.writeText(verseText(n, v)); toast('Copied'); } catch { toast('Couldn’t copy'); } return; }
+      case 'q-share': { const [n, v] = id.split(':').map(Number); return navigator.share?.({ text: verseText(n, v) }).catch(() => {}); }
+      case 'q-mem': { const n = +id; try { await qTextNow(n); } catch {} if (!QR.list) QR.list = await quran.surahs().catch(() => null); return memSheet(n); }
+      case 'mem-step': { const [k, d] = id.split(':'); return memAdjust(k, +d); }
+      case 'mem-start': return memStart();
       case 'pod-dl': return podDownload(id);
       case 'pod-follow': return podFollow(id);
       case 'pod-clear': PC.results = null; PC.q = ''; return render();
@@ -2957,52 +2971,270 @@ function podFollow(id) {
 /* =====================================================================
    Quran
    ===================================================================== */
-const QR = { list: null, text: new Map(), translit: true };
-const reciter = () => S.settings.reciter || 'ar.alafasy';
-const reciterName = () => (quran.RECITERS.find(r => r.id === reciter()) || quran.RECITERS[0]).name;
-function qList() { if (!QR.list && !PC.done?.has('qlist')) podLoad('qlist', async () => { QR.list = await quran.surahs(); }); return QR.list; }
-function qText(n) { const k = n + reciter(); if (!QR.text.has(k) && !PC.done?.has('q' + k)) podLoad('q' + k, async () => QR.text.set(k, await quran.surah(n, reciter()))); return QR.text.get(k); }
-VIEWS.quran = () => {
-  if (S.param) return quranReader(+S.param);
-  const list = qList(), spot = S.quranSpot;
-  const sname = spot && list?.[spot.surah - 1];
-  return `<div class="page-head"><h1>Quran</h1></div>
-    ${sname ? `<div class="q-continue" data-action="q-resume"><div><div class="q-c-eyebrow">Continue listening</div><div class="q-c-t">${esc(sname.englishName)}</div><div class="q-c-s">Verse ${spot.ayah} of ${sname.numberOfAyahs}</div></div><span class="q-c-play">${icon('play')}</span></div>` : ''}
-    <div class="settings-group q-group"><button class="set-row" data-action="q-reciter"><span>Reciter</span><span class="set-val">${esc(reciterName())}${icon('back', 'chev')}</span></button></div>
-    <div class="q-label">Surahs</div>
-    ${list ? `<div class="settings-group q-list">${list.map(s => `<a class="q-row" href="#/quran/${s.number}"><span class="q-n">${s.number}</span><span class="q-main"><b>${esc(s.englishName)}</b><em>${esc(s.englishNameTranslation)} · ${s.numberOfAyahs} verses</em></span><span class="q-ar" dir="rtl" lang="ar">${esc(s.name.replace(/^سُورَةُ\s*/, ''))}</span></a>`).join('')}</div>` : '<div class="pod-loading">Loading…</div>'}`;
-};
-function quranReader(n) {
-  const list = qList(), s = list?.[n - 1], ayahs = qText(n);
-  const cur = current(), on = cur?.kind === 'ayah' && cur.surah === n ? cur.g : 0;
-  const head = s ? `<div class="qr-head"><div class="qr-head-ar" dir="rtl" lang="ar">${esc(s.name.replace(/^سُورَةُ\s*/, ''))}</div><h1>${esc(s.englishName)}</h1><div class="muted">${esc(s.englishNameTranslation)} · ${s.numberOfAyahs} verses · ${esc(reciterName())}</div>
-    <div class="pod-head-actions"><button class="btn primary" data-action="q-play" data-id="${n}:1">${icon('play')}Play</button><button class="btn" data-action="q-tr">${QR.translit ? 'Hide translation' : 'Show translation'}</button></div></div>` : '';
-  return `${back()}${head}${ayahs ? `<div class="q-verses${QR.translit ? '' : ' no-tr'}">${n !== 1 && n !== 9 ? '<div class="q-bism" dir="rtl" lang="ar">بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ</div>' : ''}${ayahs.map(a => `<div class="q-v${a.g === on ? ' on' : ''}" data-ayah="${a.g}" data-action="q-play" data-id="${n}:${a.n}"><div class="q-v-ar" dir="rtl" lang="ar">${esc(n !== 1 && n !== 9 && a.n === 1 ? a.ar.replace(/^بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ\s*/, '') : a.ar)} <span class="q-v-n">${a.n}</span></div><div class="q-v-en">${esc(a.en)}</div></div>`).join('')}</div>` : '<div class="pod-loading">Loading…</div>'}`;
+const QR = { list: null, juz: null, text: new Map(), audio: new Map(), timing: new Map(), recs: null, tab: 'surah', q: '', rq: '', rf: 'all', curV: 0, daily: null };
+const reciterId = () => S.settings.reciter || 'ar.alafasy';
+const recById = id => QR.recs?.find(r => r.id === id) || (id.startsWith('ar.') ? { id, name: 'Mishary Alafasy', kind: 'verse', follows: true } : null);
+const rec = () => recById(reciterId()) || { id: 'ar.alafasy', name: 'Mishary Alafasy', kind: 'verse', follows: true };
+const surahName = s => s.name.replace(/^سُورَةُ\s*/, '');
+function qLoad(key, fn) { if (!PC.done?.has(key)) podLoad(key, fn); }
+function qList() { if (!QR.list) qLoad('qlist', async () => { QR.list = await quran.surahs(); }); return QR.list; }
+function qRecs() { if (!QR.recs) qLoad('qrecs', async () => { QR.recs = await quran.reciters(); }); return QR.recs; }
+function qText(n) { if (!QR.text.has(n)) qLoad('qt' + n, async () => QR.text.set(n, await quran.text(n))); return QR.text.get(n); }
+async function qTextNow(n) { if (!QR.text.has(n)) QR.text.set(n, await quran.text(n)); return QR.text.get(n); }
+async function qTimingNow(r, n) { if (!r.read) return null; const k = r.read + ':' + n; if (!QR.timing.has(k)) { try { QR.timing.set(k, await quran.timing(r.read, n)); } catch { return null; } } return QR.timing.get(k); }
+/** Which verse is playing right now, for any reciter. */
+function curVerse() {
+  const t = current(); if (!t) return null;
+  if (t.kind === 'ayah') return { s: t.surah, v: t.n };
+  if (t.kind === 'surahrec') return { s: t.surah, v: QR.curV || 1 };
+  return null;
 }
-async function qPlay(n, from = 1) {
+const initials = n => n.replace(/^(sheikh|shaik|shaikh)\s+/i, '').split(/[\s-]+/).filter(w => !/^(al|as|ash|ar|az|bin|ibn)$/i.test(w)).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+const AV_COLORS = [['#1f3b33', '#9fd1bf'], ['#3d3320', '#e6c98a'], ['#2a2f45', '#b7c2f0'], ['#3a2430', '#efb6cb'], ['#203a3a', '#9fd8d8'], ['#33283f', '#cdb8ee'], ['#3d2a20', '#f0c2a2'], ['#2f3320', '#d6e09a']];
+const avatar = (r, cls = '') => { let h = 0; for (const c of r.name) h = (h * 31 + c.charCodeAt(0)) | 0; const [bg, fg] = AV_COLORS[Math.abs(h) % AV_COLORS.length]; return `<span class="q-av ${cls}" style="background:${bg};color:${fg}">${esc(initials(r.name))}</span>`; };
+
+VIEWS.quran = () => {
+  if (S.param) { const [n, v] = String(S.param).split('.').map(Number); if (v) QR.scrollTo = v; return quranReader(n); }
+  const list = qList(), spot = S.quranSpot, r = rec(); qRecs();
+  const sname = spot && list?.[spot.surah - 1];
+  if (!QR.daily) { const [s, v] = quran.DAILY[Math.floor(Date.now() / 864e5) % quran.DAILY.length]; QR.daily = { s, v }; quran.verse(s, v).then(x => { QR.daily = x; if (S.route === 'quran' && !S.param) render(); }).catch(() => {}); }
+  const d = QR.daily;
+  const q = QR.q.trim().toLowerCase();
+  const rows = list ? list.filter(s => !q || String(s.number) === q || s.englishName.toLowerCase().replace(/[-']/g, '').includes(q.replace(/[-']/g, '')) || s.englishNameTranslation.toLowerCase().includes(q) || s.name.includes(q)) : null;
+  let body = '';
+  if (QR.tab === 'surah') body = rows ? (rows.length ? `<div class="settings-group q-list">${rows.map(s => `<a class="q-row" href="#/quran/${s.number}"><span class="q-n">${s.number}</span><span class="q-main"><b>${esc(s.englishName)}</b><em>${esc(s.englishNameTranslation)} · ${s.numberOfAyahs} verses</em></span><span class="q-ar" dir="rtl" lang="ar">${esc(surahName(s))}</span></a>`).join('')}</div>` : `<p class="muted pod-none">No surah matches “${esc(QR.q)}”.</p>`) : '<div class="pod-loading">Loading…</div>';
+  else if (QR.tab === 'juz') {
+    if (!QR.juz) qLoad('qjuz', async () => { QR.juz = await quran.juzs(); });
+    body = QR.juz && list ? `<div class="settings-group q-list">${QR.juz.map((j, i) => { const nx = QR.juz[i + 1]; const end = !nx ? { surah: 114, ayah: 6 } : nx.ayah > 1 ? { surah: nx.surah, ayah: nx.ayah - 1 } : { surah: nx.surah - 1, ayah: list[nx.surah - 2].numberOfAyahs };
+      return `<a class="q-row" href="#/quran/${j.surah}.${j.ayah}"><span class="q-n">${i + 1}</span><span class="q-main"><b>Juz ${i + 1}</b><em>${esc(list[j.surah - 1].englishName)} ${j.ayah} – ${end.surah !== j.surah ? esc(list[end.surah - 1].englishName) + ' ' : ''}${end.ayah}</em></span>${icon('back', 'chev')}</a>`; }).join('')}</div>` : '<div class="pod-loading">Loading…</div>';
+  } else {
+    const saved = (S.quranSaved || []).slice().sort((a, b) => b.at - a.at);
+    body = saved.length ? `<div class="settings-group q-list">${saved.map(x => { const s = list?.[x.s - 1]; const a = QR.text.get(x.s)?.[x.v - 1]; if (!a) qText(x.s);
+      return `<a class="q-saved" href="#/quran/${x.s}.${x.v}"><div class="q-saved-ref">${esc(s?.englishName || 'Surah ' + x.s)} · ${x.v}</div>${a ? `<div class="q-saved-ar" dir="rtl" lang="ar">${esc(a.ar)}</div><div class="q-saved-en">${esc(a.en)}</div>` : ''}</a>`; }).join('')}</div>` : `<div class="empty-state small"><h2>No saved verses yet</h2><p>Press and hold any verse to save it here.</p></div>`;
+  }
+  return `<div class="page-head"><h1>Quran</h1></div>
+    ${sname ? `<div class="q-continue" data-action="q-resume"><div><div class="q-c-eyebrow">Continue · ${esc(recById(spot.reciter || reciterId())?.name || r.name)}</div><div class="q-c-t">${esc(sname.englishName)}</div><div class="q-c-s">Verse ${spot.ayah} of ${sname.numberOfAyahs}</div><div class="q-c-bar"><i style="width:${Math.max(2, spot.ayah / sname.numberOfAyahs * 100)}%"></i></div></div><span class="q-c-play">${icon('play')}</span></div>` : ''}
+    ${d?.ar ? `<a class="q-daily" href="#/quran/${d.s}.${d.v}"><div class="q-daily-ref">Verse of the day · ${esc(d.name)} ${d.v}</div><div class="q-daily-ar" dir="rtl" lang="ar">${esc(d.ar)}</div><div class="q-daily-en">${esc(d.en)}</div></a>` : ''}
+    <div class="settings-group q-group"><a class="set-row" href="#/reciters"><span>Reciter</span><span class="set-val">${esc(r.name)}${icon('back', 'chev')}</span></a></div>
+    <div class="seg q-seg" role="tablist">${[['surah', 'Surah'], ['juz', 'Juz'], ['saved', 'Saved']].map(([k, l]) => `<button role="tab" aria-selected="${QR.tab === k}" class="${QR.tab === k ? 'on' : ''}" data-action="q-tab" data-id="${k}">${l}</button>`).join('')}</div>
+    ${QR.tab === 'surah' ? `<label class="search-box q-search">${icon('search')}<input id="q-find" class="input" type="search" placeholder="Surah name or number" value="${esc(QR.q)}" autocomplete="off" enterkeyhint="search"></label>` : ''}
+    <div id="q-body">${body}</div>`;
+};
+
+function quranReader(n) {
+  const list = qList(), s = list?.[n - 1], ayahs = qText(n), r = rec(); qRecs();
+  if (!s) return `${back()}<div class="pod-loading">Loading…</div>`;
+  const cv = curVerse(), on = cv?.s === n ? cv.v : 0;
+  const page = S.settings.qView === 'page';
+  const bism = n !== 1 && n !== 9 ? '<div class="q-bism" dir="rtl" lang="ar">بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ</div>' : '';
+  const head = `<div class="qr-head"><div class="qr-head-ar" dir="rtl" lang="ar">${esc(surahName(s))}</div><h1>${esc(s.englishName)}</h1><div class="muted">${esc(s.englishNameTranslation)} · ${s.numberOfAyahs} verses · ${esc(r.name)}</div>
+    <div class="pod-head-actions"><button class="btn primary" data-action="q-play" data-id="${n}:1">${icon('play')}Play</button><button class="btn" data-action="q-mem" data-id="${n}">${icon('repeat')}Memorize</button></div>
+    <div class="seg q-view">${[['verse', 'Verses'], ['page', 'Pages']].map(([k, l]) => `<button class="${(page ? 'page' : 'verse') === k ? 'on' : ''}" data-action="q-view" data-id="${k}">${l}</button>`).join('')}</div>
+    ${r.kind === 'surah' && !r.follows ? `<p class="muted q-note">${esc(r.name)} plays the whole surah, so verses don’t light up as he recites.</p>` : ''}${quran.has(r, n) ? '' : `<p class="muted q-note">${esc(r.name)} hasn’t recorded this surah. Pick another reciter to listen.</p>`}</div>`;
+  if (!ayahs) return `${back()}${head}<div class="pod-loading">Loading…</div>`;
+  const hide = P.mem?.hide && P.mem.s === n ? ' mem-hide' : '';
+  if (page) {
+    const pages = []; for (const a of ayahs) { const last = pages[pages.length - 1]; if (!last || last.page !== a.page) pages.push({ page: a.page, juz: a.juz, ayahs: [a] }); else last.ayahs.push(a); }
+    return `${back()}${head}<div class="q-pages${hide}">${pages.map((p, i) => `<section class="q-page"><div class="q-page-top"><span>Juz ${p.juz}</span><span>Page ${p.page}</span><span>${esc(s.englishName)}</span></div>
+      ${i === 0 ? `<div class="q-banner" dir="rtl" lang="ar">سُورَةُ ${esc(surahName(s))}</div>${bism}` : ''}
+      <div class="q-flow" dir="rtl" lang="ar">${p.ayahs.map(a => `<span class="q-pv${a.n === on ? ' on' : ''}" data-v="${a.n}" data-action="q-verse" data-id="${n}:${a.n}">${esc(a.ar)} <span class="q-orn">﴿${quran.arNum(a.n)}﴾</span></span>`).join(' ')}</div></section>`).join('')}</div>`;
+  }
+  const saved = new Set((S.quranSaved || []).filter(x => x.s === n).map(x => x.v));
+  return `${back()}${head}<div class="q-verses${hide}">${bism}${ayahs.map(a => `<div class="q-v${a.n === on ? ' on' : ''}" data-v="${a.n}" data-action="q-play" data-id="${n}:${a.n}"><div class="q-v-ar" dir="rtl" lang="ar">${esc(a.ar)} <span class="q-orn">﴿${quran.arNum(a.n)}﴾</span></div><div class="q-v-en">${esc(a.en)}</div>${saved.has(a.n) ? `<span class="q-v-saved">${icon('heart')}</span>` : ''}</div>`).join('')}</div>`;
+}
+
+/* ---------- reciters ---------- */
+const SHELVES = [
+  ['Featured', ['Alafasy', 'Yasser Al-Dosari', 'Islam Sobhi', 'Abdul Basit', 'Nasser Alqatami', 'Maher Al-Muaiqly', 'Saad Al-Ghamdi', 'Ahmed Al-Ajmi']],
+  ['Calm and slow', ['Al-Husary', 'Minshawi', 'Raad Al Kurdi', 'Mansour Al-Salemi', 'Idrees Abkr', 'Hazza Al-Balushi', 'Muhammad Ayyub', 'Abdullah Basfar']],
+  ['Haramain imams', ['Sudais', 'Shuraim', 'Bandar Balilah', 'Abdullah Al-Johany', 'Yasser Al-Dosari', 'Ali Jaber', 'Khalid Al-Jileel', 'Al-Hudhaifi']],
+];
+const simple = s => s.toLowerCase().replace(/[^a-z]/g, '').replace(/(.)\1/g, '$1');
+function recRow(r) {
+  const on = r.id === reciterId();
+  return `<div class="q-rec${on ? ' on' : ''}" data-action="q-set-reciter" data-id="${esc(r.id)}">${avatar(r)}<span class="q-rec-main"><b>${esc(r.name)}</b><em>${[r.style, r.follows ? 'Follows verses' : 'Whole surah'].filter(Boolean).join(' · ')}</em></span>
+    <button class="icon-btn small q-sample${QR.sampling === r.id ? ' on' : ''}" data-action="q-sample" data-id="${esc(r.id)}" aria-label="Hear a sample">${icon(QR.sampling === r.id ? 'pause' : 'play')}</button>${on ? icon('check', 'q-check') : '<span class="q-check"></span>'}</div>`;
+}
+VIEWS.reciters = () => {
+  const recs = qRecs();
+  if (!recs) return `${back()}<div class="page-head"><h1>Reciters</h1></div><div class="pod-loading">Loading reciters…</div>`;
+  const q = simple(QR.rq);
+  const pool = recs.filter(r => QR.rf === 'all' || (QR.rf === 'follows' ? r.follows : /Mujawwad/.test(r.style || '')));
+  const found = q ? pool.filter(r => simple(r.name).includes(q)) : pool;
+  const pick = name => recs.find(r => !/Warsh|Qalon|Dori|Sosi/.test(r.style || '') && simple(r.name).includes(simple(name)));
+  const shelves = !q && QR.rf === 'all' ? SHELVES.map(([t, names]) => { const rs = [...new Set(names.map(pick).filter(Boolean))]; return rs.length ? `<section class="section"><div class="section-head"><h2>${t}</h2></div><div class="shelf q-tiles">${rs.map(r => `<div class="q-tile${r.id === reciterId() ? ' on' : ''}" data-action="q-set-reciter" data-id="${esc(r.id)}">${avatar(r, 'big')}<span>${esc(r.name)}</span></div>`).join('')}</div></section>` : ''; }).join('') : '';
+  const sorted = [...found].sort((a, b) => a.name.localeCompare(b.name));
+  return `${back()}<div class="page-head"><h1>Reciters</h1></div>
+    <label class="search-box">${icon('search')}<input id="rec-find" class="input" type="search" placeholder="Search ${recs.length} reciters" value="${esc(QR.rq)}" autocomplete="off" enterkeyhint="search"></label>
+    <div class="seg q-seg">${[['all', 'All'], ['follows', 'Follows verses'], ['muj', 'Mujawwad']].map(([k, l]) => `<button class="${QR.rf === k ? 'on' : ''}" data-action="q-rf" data-id="${k}">${l}</button>`).join('')}</div>
+    <div id="rec-body">${shelves}<section class="section"><div class="section-head"><h2>${q ? 'Results' : 'All reciters'}</h2><span class="muted">${sorted.length}</span></div>${sorted.length ? `<div class="settings-group q-recs">${sorted.map(recRow).join('')}</div>` : `<p class="muted pod-none">No reciter matches “${esc(QR.rq)}”.</p>`}</section></div>`;
+};
+let sampleEl;
+async function qSample(id) {
+  const r = recById(id); if (!r) return;
+  if (sampleEl) { sampleEl.pause(); sampleEl = null; }
+  if (QR.sampling === id) { QR.sampling = null; return render(); }
+  try {
+    const url = r.kind === 'verse' ? (await quran.verseAudio(1, r.id))[1] : quran.surahUrl(r, 1);
+    if (!engine.el.paused) engine.el.pause();
+    sampleEl = new Audio(url); QR.sampling = id; render();
+    const stop = () => { if (QR.sampling === id) { QR.sampling = null; sampleEl?.pause(); sampleEl = null; render(); } };
+    sampleEl.addEventListener('ended', stop); sampleEl.addEventListener('error', () => { toast('Couldn’t play a sample right now'); stop(); });
+    await sampleEl.play(); setTimeout(stop, 12000);
+  } catch { QR.sampling = null; render(); }
+}
+async function qSetReciter(id) {
+  const r = recById(id); if (!r) return;
+  S.settings.reciter = id; await saveSettings(); haptic(); toast(r.name);
+  const cv = curVerse();
+  if (cv) qPlay(cv.s, cv.v, { keepPaused: engine.el.paused }); // switch voices without losing your place
+  render();
+}
+
+/* ---------- playing ---------- */
+async function qPlay(n, from = 1, { keepPaused = false } = {}) {
   const list = QR.list || await quran.surahs().catch(() => null); QR.list = list;
   const s = list?.[n - 1]; if (!s) return toast('Couldn’t load the Quran. Check your connection.');
-  let ayahs = QR.text.get(n + reciter());
-  if (!ayahs) { try { ayahs = await quran.surah(n, reciter()); QR.text.set(n + reciter(), ayahs); } catch { return toast('Couldn’t load this surah. Check your connection.'); } }
-  const art = quran.cover(s.englishName, s.name.replace(/^سُورَةُ\s*/, ''));
-  const ids = ayahs.map(a => { const id = `qur:${reciter()}:${a.g}`; S.ext.set(id, { id, ext: true, kind: 'ayah', surah: n, n: a.n, g: a.g, title: `${s.englishName} · Verse ${a.n}`, artist: reciterName(), album: 'Quran', category: 'Quran', art, url: a.audio }); return id; });
-  saveExt(S.ext.get(ids[0]));
-  await playList(ids, Math.max(0, from - 1), { context: s.englishName, ctxRoute: 'quran/' + n, mode: 'quran' });
+  const r = rec();
+  if (!quran.has(r, n)) return toast(`${r.name} hasn’t recorded ${s.englishName}. Pick another reciter.`);
+  const art = quran.cover(s.englishName, surahName(s));
+  if (r.kind === 'verse') {
+    let audio = QR.audio.get(n + r.id), ayahs;
+    try { ayahs = await qTextNow(n); if (!audio) { audio = await quran.verseAudio(n, r.id); QR.audio.set(n + r.id, audio); } } catch { return toast('Couldn’t load this surah. Check your connection.'); }
+    const ids = ayahs.map((a, i) => { const id = `qur:${r.id}:${a.g}`; S.ext.set(id, { id, ext: true, kind: 'ayah', surah: n, n: a.n, g: a.g, title: `${s.englishName} · Verse ${a.n}`, artist: r.name, album: 'Quran', category: 'Quran', art, url: audio[i] }); return id; });
+    saveExt(S.ext.get(ids[0]));
+    const ord = P.mem ? memOrder(ids) : null;
+    await playList(ord || ids, ord ? 0 : Math.max(0, from - 1), { context: s.englishName, ctxRoute: 'quran/' + n, mode: 'quran' });
+  } else {
+    const ids = list.filter(x => x.number >= n && quran.has(r, x.number)).slice(0, 20).map(x => { const id = `qs:${r.id}:${x.number}`; S.ext.set(id, { id, ext: true, kind: 'surahrec', surah: x.number, title: x.englishName, artist: r.name, album: 'Quran', category: 'Quran', art: quran.cover(x.englishName, surahName(x)), url: quran.surahUrl(r, x.number), read: r.read }); return id; });
+    saveExt(S.ext.get(ids[0]));
+    const tm = await qTimingNow(r, n);
+    QR.curV = from;
+    if (from > 1 && tm?.[from - 1]) { P.resumeId = ids[0]; P.resumeAt = tm[from - 1][0] / 1000; }
+    await playList(ids, 0, { context: s.englishName, ctxRoute: 'quran/' + n, mode: 'quran' });
+    if (from > 1 && tm?.[from - 1]) seekWhenReady(tm[from - 1][0] / 1000);
+  }
+  if (keepPaused) setTimeout(() => engine.el.pause(), 300);
+}
+/** Keeps the highlighted verse in step with a whole-surah recording, and runs Memorize repeats. */
+function qTick(c) {
+  const t = current(); if (t?.kind !== 'surahrec') return;
+  const tm = QR.timing.get(t.read + ':' + t.surah);
+  if (!tm) { if (t.read && !QR.loadingT) { QR.loadingT = true; quran.timing(t.read, t.surah).then(x => QR.timing.set(t.read + ':' + t.surah, x)).catch(() => {}).finally(() => { QR.loadingT = false; }); } return; }
+  const ms = c * 1000;
+  if (P.mem && P.mem.s === t.surah && !P.mem.wait) {
+    const m = P.mem, end = tm[m.v - 1]?.[1];
+    if (end && ms >= end - 60) return memStep(() => { engine.el.currentTime = tm[m.v - 1][0] / 1000; });
+  }
+  let v = tm.findIndex(([a, b]) => ms >= a && ms < b) + 1;
+  if (!v) v = ms >= (tm[tm.length - 1]?.[1] || Infinity) ? tm.length : QR.curV;
+  if (v && v !== QR.curV) { QR.curV = v; qMark(); }
 }
 function qMark() {
-  const t = current(); if (t?.kind !== 'ayah') return;
-  S.quranSpot = { surah: t.surah, ayah: t.n, reciter: reciter(), at: Date.now() }; kv.set('quranSpot', S.quranSpot);
-  if (S.route !== 'quran' || +S.param !== t.surah) return;
-  $$('.q-v.on').forEach(v => v.classList.remove('on'));
-  const v = document.querySelector(`.q-v[data-ayah="${t.g}"]`); if (!v) return;
+  const cv = curVerse(); if (!cv) return;
+  S.quranSpot = { surah: cv.s, ayah: cv.v, reciter: reciterId(), at: Date.now() }; kv.set('quranSpot', S.quranSpot); queueStatePush();
+  if (P.panel === 'lyrics' && $('#now').classList.contains('open')) renderPanel();
+  if (S.route !== 'quran' || parseInt(S.param) !== cv.s) return;
+  $$('.q-v.on, .q-pv.on').forEach(v => v.classList.remove('on'));
+  const v = document.querySelector(`.q-v[data-v="${cv.v}"], .q-pv[data-v="${cv.v}"]`); if (!v) return;
   v.classList.add('on');
   if (!QR.userScroll || Date.now() - QR.userScroll > 4000) v.scrollIntoView({ block: 'center', behavior: S.settings.reduceMotion ? 'auto' : 'smooth' });
 }
 $('#main').addEventListener('touchmove', () => { QR.userScroll = Date.now(); }, { passive: true });
 $('#main').addEventListener('wheel', () => { QR.userScroll = Date.now(); }, { passive: true });
-function qResume() { const sp = S.quranSpot; if (!sp) return go('quran'); if (sp.reciter && sp.reciter !== reciter()) { S.settings.reciter = sp.reciter; saveSettings(); } qPlay(sp.surah, sp.ayah); }
-function qReciterSheet() {
-  sheet(`<h2>Reciter</h2><div class="settings-group">${quran.RECITERS.map(r => `<button class="set-row" data-action="q-set-reciter" data-id="${r.id}"><span>${esc(r.name)}</span>${r.id === reciter() ? icon('check', 'accent') : ''}</button>`).join('')}</div>`);
+function qResume() { const sp = S.quranSpot; if (!sp) return go('quran'); if (sp.reciter && sp.reciter !== reciterId()) { S.settings.reciter = sp.reciter; saveSettings(); } qPlay(sp.surah, sp.ayah); }
+
+/* ---------- verse actions (press and hold) ---------- */
+function qVerseSheet(n, v) {
+  const s = QR.list?.[n - 1], a = QR.text.get(n)?.[v - 1]; if (!a) return;
+  const saved = (S.quranSaved || []).some(x => x.s === n && x.v === v);
+  sheet(`<div class="q-vs"><div class="q-vs-ref">${esc(s?.englishName || '')} · Verse ${v}</div><div class="q-vs-ar" dir="rtl" lang="ar">${esc(a.ar)}</div><div class="q-vs-en">${esc(a.en)}</div>
+    <div class="settings-group q-vs-acts">
+      <button class="set-row" data-action="q-play" data-id="${n}:${v}" data-close><span>Play from here</span>${icon('play')}</button>
+      <button class="set-row" data-action="q-rep" data-id="${n}:${v}" data-close><span>Repeat this verse</span><span class="muted">3×</span></button>
+      <button class="set-row" data-action="q-save" data-id="${n}:${v}" data-close><span>${saved ? 'Remove from Saved' : 'Save verse'}</span>${icon('heart')}</button>
+      <button class="set-row" data-action="q-copy" data-id="${n}:${v}" data-close><span>Copy</span>${icon('copy')}</button>
+      ${navigator.share ? `<button class="set-row" data-action="q-share" data-id="${n}:${v}" data-close><span>Share</span>${icon('share')}</button>` : ''}
+    </div></div>`);
+}
+const verseText = (n, v) => { const s = QR.list?.[n - 1], a = QR.text.get(n)?.[v - 1]; return a ? `${a.ar}\n\n${a.en}\n\n— ${s?.englishName || ''} ${n}:${v}` : ''; };
+function qSave(n, v) {
+  S.quranSaved = S.quranSaved || [];
+  const i = S.quranSaved.findIndex(x => x.s === n && x.v === v);
+  if (i >= 0) { S.quranSaved.splice(i, 1); toast('Removed from Saved'); } else { S.quranSaved.push({ s: n, v, at: Date.now() }); toast('Saved'); haptic(); }
+  kv.set('quranSaved', S.quranSaved); queueStatePush(); render();
+}
+function bindQuran() {
+  const f = $('#q-find'); if (f && !f._b) { f._b = true; f.addEventListener('input', () => { QR.q = f.value; const pos = f.selectionStart; render(); const g = $('#q-find'); g?.focus(); try { g.setSelectionRange(pos, pos); } catch {} }); }
+  const rf = $('#rec-find'); if (rf && !rf._b) { rf._b = true; rf.addEventListener('input', () => { QR.rq = rf.value; const pos = rf.selectionStart; render(); const g = $('#rec-find'); g?.focus(); try { g.setSelectionRange(pos, pos); } catch {} }); }
+  const box = $('.q-verses'); if (box && !box._b) {
+    box._b = true; let tm, held = false;
+    const start = e => { const v = e.target.closest('.q-v'); if (!v) return; held = false; tm = setTimeout(() => { held = true; haptic(); const [n, x] = v.dataset.id.split(':').map(Number); qVerseSheet(n, x); }, 480); };
+    const cancel = () => clearTimeout(tm);
+    box.addEventListener('touchstart', start, { passive: true }); box.addEventListener('touchend', cancel); box.addEventListener('touchmove', cancel, { passive: true });
+    box.addEventListener('contextmenu', e => { const v = e.target.closest('.q-v'); if (!v) return; e.preventDefault(); const [n, x] = v.dataset.id.split(':').map(Number); qVerseSheet(n, x); });
+    box.addEventListener('click', e => { if (held) { e.stopPropagation(); e.preventDefault(); held = false; } }, true);
+  }
+  if (QR.scrollTo && S.route === 'quran') { const el = document.querySelector(`.q-v[data-v="${QR.scrollTo}"], .q-pv[data-v="${QR.scrollTo}"]`); if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); QR.scrollTo = 0; } }
+}
+
+/* ---------- memorize ---------- */
+function memSheet(n, preset) {
+  const s = QR.list?.[n - 1]; if (!s) return;
+  const m = Object.assign({ s: n, from: 1, to: Math.min(5, s.numberOfAyahs), each: 3, range: 2, gap: 2, speed: 1, hide: false }, S.settings.memo || {}, preset || {}, { s: n });
+  m.from = Math.min(m.from, s.numberOfAyahs); m.to = Math.min(Math.max(m.to, m.from), s.numberOfAyahs);
+  QR.memDraft = m;
+  const stp = (k, label, val) => `<div class="set-row"><span>${label}</span><span class="stepper"><button data-action="mem-step" data-id="${k}:-1" aria-label="Less">−</button><b>${val}</b><button data-action="mem-step" data-id="${k}:1" aria-label="More">+</button></span></div>`;
+  const plays = (m.to - m.from + 1) * m.each * m.range;
+  sheet(`<div id="mem-sheet"><h2>Memorize</h2><p class="muted">${esc(s.englishName)} · ${esc(rec().name)}</p>
+    <div class="settings-group">${stp('from', 'From verse', m.from)}${stp('to', 'To verse', m.to)}${stp('each', 'Repeat each verse', m.each + '×')}${stp('range', 'Repeat the range', m.range + '×')}${stp('gap', 'Pause between repeats', m.gap + ' sec')}${stp('speed', 'Speed', m.speed + '×')}
+      <div class="set-row"><div class="lbl"><b>Hide verses while it plays</b><span>The verse being recited is blurred so you can test yourself</span></div><button class="switch ${m.hide ? 'on' : ''}" role="switch" aria-checked="${m.hide}" data-action="mem-step" data-id="hide:1" aria-label="Hide verses"></button></div></div>
+    <p class="muted mem-sum">${plays} play${plays === 1 ? '' : 's'}</p>
+    <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn primary" data-action="mem-start" data-close>Start</button></div></div>`);
+}
+function memAdjust(k, d) {
+  const m = QR.memDraft, max = QR.list[m.s - 1].numberOfAyahs;
+  if (k === 'from') { m.from = Math.max(1, Math.min(max, m.from + d)); if (m.to < m.from) m.to = m.from; }
+  else if (k === 'to') m.to = Math.max(m.from, Math.min(max, m.to + d));
+  else if (k === 'each') m.each = Math.max(1, Math.min(20, m.each + d));
+  else if (k === 'range') m.range = Math.max(1, Math.min(20, m.range + d));
+  else if (k === 'gap') m.gap = Math.max(0, Math.min(10, m.gap + d));
+  else if (k === 'speed') { const sp = [0.5, 0.6, 0.7, 0.75, 0.85, 1, 1.15, 1.25]; m.speed = sp[Math.max(0, Math.min(sp.length - 1, sp.indexOf(m.speed) + d))] || 1; }
+  else if (k === 'hide') m.hide = !m.hide;
+  memSheet(m.s, m);
+}
+/** A verse-by-verse queue already in Memorize order: each verse, then the range again. */
+function memOrder(ids) {
+  const m = P.mem; return ids.slice(m.from - 1, m.to);
+}
+async function memStart() {
+  const m = QR.memDraft; if (!m) return;
+  S.settings.memo = { each: m.each, range: m.range, gap: m.gap, speed: m.speed, hide: m.hide }; saveSettings();
+  P.mem = { ...m, v: m.from, rep: 1, rrep: 1, wait: false };
+  P.repeat = 'off'; P.shuffle = false; updateModes();
+  engine.setRate(m.speed); P.speed = m.speed;
+  await qPlay(m.s, m.from);
+  if (S.route === 'quran') render();
+}
+function memEnd(msg) { if (!P.mem) return; P.mem = null; engine.setRate(1); P.speed = 1; engine.el.pause(); toast(msg || 'Memorize finished'); if (S.route === 'quran') render(); }
+/** Called at the end of each verse while memorizing. `seek` jumps back for whole-surah recordings. */
+function memStep(seek) {
+  const m = P.mem; if (!m || m.wait) return true;
+  const surahRec = current()?.kind === 'surahrec';
+  let target;
+  if (m.rep < m.each) { m.rep++; target = m.v; }
+  else if (m.v < m.to) { m.rep = 1; m.v++; target = m.v; }
+  else if (m.rrep < m.range) { m.rrep++; m.rep = 1; m.v = m.from; target = m.v; }
+  else { memEnd(); return true; }
+  m.wait = true; engine.el.pause();
+  const go = async () => {
+    if (!P.mem) return;
+    m.wait = false;
+    if (surahRec) { const tm = QR.timing.get(current().read + ':' + m.s); if (tm?.[target - 1]) engine.el.currentTime = tm[target - 1][0] / 1000; QR.curV = target; qMark(); engine.el.play(); }
+    else { const k = P.queue.findIndex(id => T(id)?.n === target); if (k >= 0) { P.idx = k; await loadTrack(P.queue[k]); } }
+  };
+  setTimeout(go, Math.max(150, m.gap * 1000));
+  return true;
 }
 
 /* =====================================================================
