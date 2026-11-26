@@ -177,8 +177,12 @@ async function boot() {
   initCloud();
   checkVersion();
   setInterval(checkVersion, 10 * 60 * 1000);
+  // new songs saved to the connected folder show up within a couple of minutes, even mid-song
+  setInterval(() => { if (S.folder && S.folderState !== 'needs-permission' && !IMP.running) scanFolder(); }, 2 * 60 * 1000);
+  // songs that couldn't upload earlier (bad Wi-Fi, signed out) go up on their own
+  setInterval(() => autoUpload(), 5 * 60 * 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkVersion(); if (S.folder && Date.now() - (S.lastScan || 0) > 30000) scanFolder(); if (S.user && Date.now() - S.lastSync > 60000) syncDown(); } else { flushListen(); savePlayer(true); } });
-  window.addEventListener('online', () => { if (S.user) syncDown(); });
+  window.addEventListener('online', () => { if (S.user) { syncDown(); setTimeout(autoUpload, 5000); } });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 function seekWhenReady(t) { const el = engine.el; const go_ = () => { try { el.currentTime = t; } catch {} onTime(); }; el.readyState >= 1 ? go_() : el.addEventListener('loadedmetadata', go_, { once: true }); }
@@ -187,11 +191,11 @@ async function initCloud() {
   if (!cloud.cloudConfigured()) return;
   try {
     S.user = await cloud.user();
-    if (S.user) syncDown();
+    if (S.user) syncDown().then(() => setTimeout(autoUpload, 5000));
     const c = await cloud.sb();
     c.auth.onAuthStateChange((_e, session) => {
       const was = S.user?.id; S.user = session?.user || null;
-      if (S.user && S.user.id !== was) syncDown();
+      if (S.user && S.user.id !== was) syncDown().then(() => setTimeout(autoUpload, 5000));
       if (S.route === 'settings') render();
     });
   } catch (e) { console.warn('cloud', e); }
@@ -1051,7 +1055,7 @@ async function importFiles(files, { retry = false, background = false } = {}) {
       try { const r = await importOne(j, known); if (r === 'skip') IMP.skipped++; else { IMP.added++; if (r === 'maybe') IMP.maybeDup++; } }
       catch (e) {
         console.error(e); IMP.failed++; j.state = 'error';
-        j.status = isQuotaError(e) ? 'Out of space' : e.message === 'unplayable' ? 'Can’t play this format' : 'Couldn’t read this file';
+        j.status = isQuotaError(e) ? 'Out of space' : e.message === 'unplayable' ? 'Can’t play this format' : e.message === 'empty' ? 'Empty or broken file' : 'Couldn’t read this file';
         updateImportRow(j);
         if (isQuotaError(e)) { IMP.cancel = true; quotaWarning(); }
       }
@@ -1066,10 +1070,12 @@ async function importFiles(files, { retry = false, background = false } = {}) {
   toast(background && IMP.added ? `Added ${count(IMP.added)} from your folder` : msg, IMP.maybeDup ? ['Review duplicates', () => go('duplicates')] : toCheck && IMP.added ? [`Check ${toCheck}`, () => go('review')] : null);
   if (S.route !== 'import') render();
   queueStatePush();
+  setTimeout(autoUpload, 3000);
 }
 async function importOne(j, known) {
   const f = j.file;
   j.status = 'Reading'; updateImportRow(j);
+  if (f.size < 20000) throw new Error('empty');
   const [hash, legacyId] = await Promise.all([meta.fingerprint(f), meta.trackId(f)]);
   if (known.hashes.has(hash) || S.tracks.has(hash) || S.tracks.has(legacyId)) {
     const t = S.tracks.get(hash) || S.tracks.get(legacyId) || [...S.tracks.values()].find(x => x.hash === hash);
@@ -2061,10 +2067,16 @@ async function refixAll() {
   S.ver++; render(); toast(`Done · ${matched} matched to the right song, the rest keep their own details`);
 }
 let uploading = false;
+/** Quietly uploads songs that are still only on this device. */
+function autoUpload() {
+  if (!S.user || !navigator.onLine || uploading || IMP.running) return;
+  if ([...S.tracks.values()].some(t => t.local && !t.cloud)) uploadLocal({ quiet: true });
+}
 async function uploadLocal({ quiet = false } = {}) {
-  if (uploading) return; uploading = true;
+  if (uploading) return;
   const ts = [...S.tracks.values()].filter(t => t.local && !t.cloud);
-  let n = 0; toast(`Uploading ${count(ts.length)} to your cloud library…`);
+  if (!ts.length) return; uploading = true;
+  let n = 0; if (!quiet) toast(`Uploading ${count(ts.length)} to your cloud library…`);
   for (const t of ts) { try { const a = await db.get('audio', t.id); const art = await db.get('art', t.id); if (a) { await uploadTrack(t, a, art); n++; } } catch (e) { syncFailed(e); break; } }
   uploading = false;
   if (n || !quiet) toast(`${count(n)} now on all your devices`); render();
