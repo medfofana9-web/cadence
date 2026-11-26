@@ -209,6 +209,7 @@ async function boot() {
   S.pod = await kv.get('pod', { subs: [], prog: {}, saved: {} });
   S.quranSpot = await kv.get('quranSpot', null);
   S.quranSaved = await kv.get('quranSaved', []);
+  CHECK.lists = await kv.get('playlistChecks', []);
   S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
   for (const [id, p] of pls) S.playlists.set(id, p);
   for (const [id, b] of arts) (id.startsWith('pl:') ? S.plCovers : S.art).set(id.replace(/^pl:/, ''), URL.createObjectURL(b));
@@ -284,13 +285,16 @@ async function initCloud() {
       if (S.user && S.user.id !== was) syncDown().then(() => setTimeout(autoUpload, 5000));
       if (S.route === 'settings') render();
     });
-  } catch (e) { console.warn('cloud', e); }
+  } catch (e) { checkLibraryFailed = true; console.warn('cloud', e); }
+  finally { checkAuthPending = false; if (S.route === 'import' && S.param === 'check') render(); }
 }
 
 let artRepaired = false;
 async function syncDown() {
   if (!S.user) return;
   try {
+    checkPulls++;
+    if (S.route === 'import' && S.param === 'check') render();
     const rows = await cloud.pullTracks();
     if (rows) {
       let changed = false;
@@ -327,7 +331,9 @@ async function syncDown() {
     if ([...S.tracks.values()].some(t => t.local && !t.cloud) && !uploading) await uploadLocal({ quiet: true });
     migrateToR2();
     if (!artRepaired) { artRepaired = true; repairArt(); }
-  } catch (e) { syncFailed(e); }
+    checkLibraryFailed = !rows;
+  } catch (e) { checkLibraryFailed = true; syncFailed(e); }
+  finally { checkPulls--; if (S.route === 'import' && S.param === 'check') render(); }
 }
 function mergeState(d) {
   const seen = new Set(S.log.map(e => e.id + e.at));
@@ -1234,6 +1240,7 @@ VIEWS.duplicates = () => {
    ===================================================================== */
 const IMP = { jobs: [], cancel: false, running: false, found: 0, added: 0, skipped: 0, failed: 0, maybeDup: 0 };
 VIEWS.import = () => {
+  if (S.param === 'check') return checkPlaylistView();
   if (S.param === 'want') return wantView();
   if (S.param !== 'files' && !IMP.jobs.length) return discoverView();
   const signedOut = cloud.cloudConfigured() && !S.user;
@@ -1462,7 +1469,7 @@ function parsePlaylists(text, fileName) {
   const base = fileName.replace(/\.[^.]+$/, '');
   if (/^\s*<\?xml|<plist/i.test(text)) {
     const doc = new DOMParser().parseFromString(text, 'application/xml');
-    const dictVal = el => { const o = {}; const kids = [...el.children]; for (let i = 0; i < kids.length; i += 2) { const k = kids[i]?.textContent; const v = kids[i + 1]; if (!k || !v) continue; o[k] = v.tagName === 'dict' ? v : v.tagName === 'array' ? v : v.textContent; } return o; };
+    const dictVal = el => { const o = {}; const kids = [...(el?.children || [])]; for (let i = 0; i < kids.length; i += 2) { const k = kids[i]?.textContent; const v = kids[i + 1]; if (!k || !v) continue; o[k] = v.tagName === 'dict' ? v : v.tagName === 'array' ? v : v.textContent; } return o; };
     const root = dictVal(doc.querySelector('plist > dict'));
     const tracks = {};
     if (root.Tracks?.children) { const kids = [...root.Tracks.children]; for (let i = 0; i < kids.length; i += 2) { const d = dictVal(kids[i + 1]); tracks[kids[i].textContent] = { title: d.Name || '', artist: d.Artist || d['Album Artist'] || '', album: d.Album || '', duration: d['Total Time'] ? +d['Total Time'] / 1000 : 0 }; } }
@@ -2709,6 +2716,25 @@ document.addEventListener('click', async e => {
       case 'pl-sort': { const p = S.playlists.get(a.dataset.pl); p.sort = a.dataset.sort; await savePlaylist(p); return render(); }
       case 'add-all': return addToPlaylistSheet(a.dataset.listIds.split(','));
       case 'save-list': return newPlaylist(a.dataset.listIds.split(','));
+      case 'check-pick': return $('#check-file')?.click();
+      case 'check-filter': CHECK.filter = a.dataset.filter; CHECK.page = 0; return render();
+      case 'check-page': CHECK.page = +a.dataset.page; render(); return $('#check-query')?.scrollIntoView({ block: 'center' });
+      case 'check-export': return checkExport(false);
+      case 'check-copy': return checkExport(true);
+      case 'check-paste': return sheet('<h2>Paste track list</h2><textarea class="input full" aria-label="Track list" id="check-pasted" placeholder="Artist - Song" rows="8"></textarea><div class="actions"><button class="btn primary" data-action="check-add-paste">Check tracks</button></div>');
+      case 'check-add-paste': {
+        const lists = checkText($('#check-pasted').value, 'Pasted list');
+        if (!lists.length) return toast('Enter one Artist - Song entry per line.');
+        closeSheet(); return addChecks(lists);
+      }
+      case 'check-decision': {
+        const list = checkSelected(), i = +a.dataset.i;
+        const row = checkResults(list)[i];
+        if (!row?.match) return;
+        return sheet('<h2>Same recording?</h2><p>' + esc(row.item.title) + ' · ' + esc(row.item.artist) + '</p><p>In your library: ' + esc(row.match.title) + ' · ' + esc(row.match.artist) + '</p><div class="actions"><button class="btn" data-action="check-record" data-i="' + i + '" data-match="missing">Keep missing</button><button class="btn primary" data-action="check-record" data-i="' + i + '" data-match="' + esc(row.match.id) + '">Same recording</button></div>');
+      }
+      case 'check-record': checkSelected().decisions[a.dataset.i] = a.dataset.match; closeSheet(); return saveChecks();
+      case 'check-reset': delete checkSelected().decisions[a.dataset.i]; return saveChecks();
       case 'pick-folder': { const i = $('#folder-input'); i.value = ''; return i.click(); }
       case 'pick-files': { const i = $('#file-input'); i.value = ''; return i.click(); }
       case 'imp-cancel': IMP.cancel = true; return toast('Stopping after the songs in progress…');
@@ -2791,6 +2817,12 @@ document.addEventListener('dblclick', e => { if (e.target.closest('.p-track')) o
 let searchT;
 document.addEventListener('input', e => {
   const id = e.target.id;
+  if (id === 'check-query') {
+    const pos = e.target.selectionStart;
+    CHECK.query = e.target.value; CHECK.page = 0; render();
+    const input = $('#check-query'); input?.focus(); input?.setSelectionRange(pos, pos);
+    return;
+  }
   if (id === 'search-input') {
     clearTimeout(searchT);
     const q = e.target.value;
@@ -2808,6 +2840,21 @@ document.addEventListener('input', e => {
     S.settings.crossfade = +e.target.value; paintRange(e.target); e.target.closest('.set-row').querySelector('.lbl span').textContent = S.settings.crossfade ? `Songs blend over ${S.settings.crossfade} seconds` : 'Off. Songs play one after another.';
     clearTimeout(e.target._t); e.target._t = setTimeout(() => { S.settingsAt = Date.now(); kv.set('settingsAt', S.settingsAt); saveSettings(); }, 300);
   }
+});
+document.addEventListener('change', async e => {
+  if (e.target.id === 'check-list') { CHECK.selected = e.target.value; resetCheck(); return render(); }
+  if (e.target.id !== 'check-file') return;
+  const files = [...e.target.files]; e.target.value = '';
+  const lists = [];
+  for (const file of files) {
+    try {
+      if (file.size > 12000000) throw Error('File too large');
+      const name = file.name.replace(/\.[^.]+$/, '');
+      if (/\.xlsx$/i.test(file.name)) lists.push({ name, items: await checkSpreadsheet(file) });
+      else lists.push(...checkText(await readText(file), name));
+    } catch { toast('Couldn’t read ' + file.name + '. Try exporting the track list as CSV.'); }
+  }
+  if (files.length) await addChecks(lists);
 });
 document.addEventListener('change', e => { const rv = e.target.closest('.rv'); if (rv && e.target.dataset.f) saveReview(rv.dataset.rv); });
 let navIdx = -1;
@@ -3435,7 +3482,226 @@ for (const el of engine.els) el.addEventListener('play', () => { if (DZ.el) dzSt
    Discover (Add Music): suggestions from your library, and search any song
    ===================================================================== */
 const DC = { q: '', type: 'track', results: null, sugg: null, loading: false, n: 0 };
-const addTabs = on => `<div class="seg q-seg add-tabs"><a class="${on === 'discover' ? 'on' : ''}" href="#/import">Discover</a><a class="${on === 'want' ? 'on' : ''}" href="#/import/want">${wantTabLabel()}</a><a class="${on === 'files' ? 'on' : ''}" href="#/import/files">Add files</a></div>`;
+
+const CHECK = { lists: [], selected: '', filter: 'missing', query: '', page: 0 };
+let checkPulls = 0, checkAuthPending = true, checkLibraryFailed = false;
+const checkLoading = () => checkPulls || (checkAuthPending && cloud.cloudConfigured());
+const checkLabels = { all: 'All', owned: 'In FOF Music', missing: 'Missing', review: 'Review Version' };
+const checkTitle = title => fold((title || '').replace(/\s*[\[(](?:feat\.?|ft\.?|featuring)\s+[^\])]+[\])]/gi, '').replace(/\s+(?:feat\.?|ft\.?|featuring)\s+.*$/i, ''));
+const checkBase = title => checkTitle((title || '').replace(/\s*[-–—(\[]\s*[^)\]]*\b(?:live|remix|acoustic|remaster(?:ed)?|instrumental|radio edit|sped up|slowed|demo|version)\b.*$/i, '').replace(/\s+(?:live|remix|acoustic|instrumental|radio edit|sped up|slowed|demo)$/i, ''));
+const checkSeconds = value => {
+  const text = String(value ?? '').trim();
+  if (/^\d+(?::\d{2}){1,2}$/.test(text)) return text.split(':').reduce((total, part) => total * 60 + Number(part), 0);
+  return Math.max(0, Number(text) || 0);
+};
+
+function checkCsv(text) {
+  const rows = [[]];
+  let value = '', quoted = false;
+  const delimiter = text.split(/\r?\n/)[0].includes('\t') ? '\t' : ',';
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '"' && quoted && text[i + 1] === '"') { value += '"'; i++; }
+    else if (char === '"' && (quoted || !value)) quoted = !quoted;
+    else if (!quoted && (char === delimiter || char === '\n' || char === '\r')) {
+      rows.at(-1).push(value); value = '';
+      if (char !== delimiter) { rows.push([]); if (char === '\r' && text[i + 1] === '\n') i++; }
+    } else value += char;
+  }
+  rows.at(-1).push(value);
+  return rows;
+}
+
+function checkRows(rows) {
+  const header = rows.shift()?.map(fold) || [];
+  const col = (...names) => header.findIndex(value => names.includes(value));
+  const title = col('song', 'title', 'name', 'track name');
+  if (title < 0) return [];
+  return rows.filter(row => row[title]?.trim()).map(row => ({
+    title: row[title].trim(), artist: row[col('artist', 'artists', 'artist name')]?.trim() || '',
+    duration: checkSeconds(row[col('duration', 'duration seconds', 'time')]),
+    id: row[col('id', 'track id')] || '', source: row[col('apple music playlists', 'apple music playlist', 'playlist', 'source playlist')] || '',
+    url: row[col('apple music track url', 'url', 'track url', 'apple music track')] || '',
+  }));
+}
+
+// Read the small set of XML parts needed for a normal, unencrypted .xlsx file.
+async function checkSpreadsheet(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  let end = bytes.length - 22;
+  while (end >= Math.max(0, bytes.length - 65557) && view.getUint32(end, true) !== 0x06054b50) end--;
+  if (end < 0 || view.getUint32(end, true) !== 0x06054b50) throw Error('Invalid spreadsheet');
+  const files = new Map(), decoder = new TextDecoder();
+  let pos = view.getUint32(end + 16, true);
+  for (let i = 0; i < view.getUint16(end + 10, true); i++) {
+    if (view.getUint32(pos, true) !== 0x02014b50) throw Error('Invalid spreadsheet index');
+    const nameLength = view.getUint16(pos + 28, true);
+    const name = decoder.decode(bytes.subarray(pos + 46, pos + 46 + nameLength));
+    files.set(name, { method: view.getUint16(pos + 10, true), size: view.getUint32(pos + 20, true), full: view.getUint32(pos + 24, true), offset: view.getUint32(pos + 42, true) });
+    pos += 46 + nameLength + view.getUint16(pos + 30, true) + view.getUint16(pos + 32, true);
+  }
+  async function xml(name) {
+    const part = files.get(name);
+    if (!part) return null;
+    if (part.full > 12000000 || ![0, 8].includes(part.method)) throw Error('Unsupported spreadsheet part');
+    const p = part.offset;
+    const start = p + 30 + view.getUint16(p + 26, true) + view.getUint16(p + 28, true);
+    const data = bytes.subarray(start, start + part.size);
+    const stream = part.method === 8 ? new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw')) : null;
+    let raw = stream ? '' : decoder.decode(data);
+    if (stream) {
+      const reader = stream.getReader();
+      let size = 0;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > 12000000) { await reader.cancel(); throw Error('Spreadsheet part too large'); }
+        raw += decoder.decode(value, { stream: true });
+      }
+      raw += decoder.decode();
+    }
+    return new DOMParser().parseFromString(raw, 'application/xml');
+  }
+  const book = await xml('xl/workbook.xml');
+  const sheets = [...(book?.getElementsByTagName('sheet') || [])];
+  const sheet = sheets.find(item => item.getAttribute('name') === 'Missing Songs') || sheets[0];
+  const rels = await xml('xl/_rels/workbook.xml.rels');
+  const target = [...(rels?.getElementsByTagName('Relationship') || [])].find(r => r.getAttribute('Id') === sheet?.getAttribute('r:id'))?.getAttribute('Target');
+  if (!target) return [];
+  const sheetPath = target.startsWith('/') ? target.slice(1) : 'xl/' + target;
+  const doc = await xml(sheetPath);
+  const strings = [...((await xml('xl/sharedStrings.xml'))?.getElementsByTagName('si') || [])].map(el => [...el.getElementsByTagName('t')].map(t => t.textContent).join(''));
+  const rows = [...(doc?.getElementsByTagName('row') || [])].map(row => {
+    const values = [];
+    for (const cell of row.getElementsByTagName('c')) {
+      const letters = cell.getAttribute('r')?.match(/^[A-Z]+/)?.[0];
+      if (!letters) continue;
+      const col = [...letters].reduce((n, letter) => n * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+      if (col > 100) continue;
+      const value = cell.getElementsByTagName('v')[0]?.textContent || '';
+      const type = cell.getAttribute('t');
+      values[col] = type === 's' ? strings[Number(value)] || '' : type === 'inlineStr' ? [...cell.getElementsByTagName('t')].map(x => x.textContent).join('') : value;
+    }
+    return values;
+  });
+  const linkDoc = await xml(sheetPath.replace(/([^/]+)$/, '_rels/$1.rels'));
+  const linkMap = new Map([...(linkDoc?.getElementsByTagName('Relationship') || [])].map(el => [el.getAttribute('Id'), el.getAttribute('Target')]));
+  const linkCol = rows[0]?.findIndex(v => fold(v) === 'apple music track');
+  if (linkCol >= 0) {
+    for (const link of doc.getElementsByTagName('hyperlink')) {
+      const address = link.getAttribute('ref')?.match(/^([A-Z]+)(\d+)$/);
+      if (!address) continue;
+      const col = [...address[1]].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0) - 1;
+      if (col === linkCol && rows[Number(address[2]) - 1]) rows[Number(address[2]) - 1][col] = linkMap.get(link.getAttribute('r:id')) || '';
+    }
+  }
+  return checkRows(rows);
+}
+
+function checkText(text, name) {
+  const table = checkRows(checkCsv(text.replace(/^\uFEFF/, '')));
+  if (table.length) return [{ name, items: table }];
+  const exported = parsePlaylists(text, name);
+  if (exported.length) return exported;
+  const items = text.split(/\r?\n/).map(line => {
+    const split = line.indexOf(' - ');
+    return split < 0 ? null : { artist: line.slice(0, split).trim(), title: line.slice(split + 3).trim() };
+  }).filter(item => item?.title && item.artist);
+  return items.length ? [{ name, items }] : [];
+}
+
+function checkResults(list) {
+  const titles = new Map(), versions = new Map();
+  for (const track of S.tracks.values()) {
+    const title = checkTitle(track.title), base = checkBase(track.title);
+    if (!title) continue;
+    if (!titles.has(title)) titles.set(title, []);
+    titles.get(title).push(track);
+    if (base && base !== title) {
+      if (!versions.has(base)) versions.set(base, []);
+      versions.get(base).push(track);
+    }
+  }
+  return list.items.map((item, i) => {
+    const choice = list.decisions?.[i];
+    if (choice === 'missing') return { item, i, status: 'missing' };
+    if (choice && S.tracks.has(choice)) return { item, i, status: 'owned', match: S.tracks.get(choice) };
+    const title = checkTitle(item.title), base = checkBase(item.title);
+    const wanted = artistCredits(item.artist).map(fold);
+    let review;
+    for (const track of new Set([...(titles.get(title) || []), ...(base !== title ? titles.get(base) || [] : []), ...(versions.get(base) || [])])) {
+      const artists = artistCredits(track.artist).map(fold);
+      if (wanted.length && artists.length && !wanted.some(artist => artists.includes(artist))) continue;
+      const exact = title === checkTitle(track.title);
+      const distance = item.duration && track.duration ? Math.abs(item.duration - track.duration) : 0;
+      if (exact && wanted.length && artists.length && distance <= 8 && ((item.duration && track.duration) || wanted[0] === artists[0])) return { item, i, status: 'owned', match: track };
+      if (!review || exact) review = track;
+    }
+    return { item, i, status: review ? 'review' : 'missing', match: review };
+  });
+}
+
+const checkSelected = () => CHECK.lists.find(list => list.id === CHECK.selected) || CHECK.lists[0];
+function resetCheck() { CHECK.filter = 'missing'; CHECK.query = ''; CHECK.page = 0; }
+async function saveChecks() { await kv.set('playlistChecks', CHECK.lists); render(); }
+async function addChecks(lists) {
+  const valid = lists.filter(list => list.items.length);
+  if (!valid.length) return toast('No tracks found. Try a playlist export, CSV, or Artist - Song lines.');
+  const added = valid.map(list => ({ ...list, id: uid(), decisions: {} }));
+  CHECK.lists = [...added, ...CHECK.lists]; CHECK.selected = added[0].id; resetCheck();
+  await saveChecks();
+}
+function checkPlaylistView() {
+  const list = checkSelected();
+  const loading = checkLoading();
+  const head = '<div class="page-head"><h1>Add Music</h1></div>' + addTabs('check');
+  const form = '<div class="row-actions"><button class="btn" data-action="check-pick">Choose playlist or tracker file</button><input id="check-file" type="file" accept=".xlsx,.csv,.txt,.xml,.m3u,.m3u8,.tsv" hidden multiple><button class="btn" data-action="check-paste">Paste track list</button></div>';
+  if (!list) return head + form + '<p class="note">Compare Apple Music exports, your Excel tracker, or a pasted list with the songs in your library.</p>';
+  const all = loading ? [] : checkResults(list);
+  const query = fold(CHECK.query);
+  const filtered = all.filter(r => (CHECK.filter === 'all' || r.status === CHECK.filter) && (!query || fold([r.item.title, r.item.artist, r.item.source].join(' ')).includes(query)));
+  const page = Math.min(CHECK.page, Math.max(0, Math.ceil(filtered.length / 100) - 1));
+  const shown = filtered.slice(page * 100, (page + 1) * 100);
+  const results = shown.map(({ item, status, match, i }) => {
+    const key = status === 'owned' && match ? listKey([match.id], list.name) : '';
+    return `<div class="dc-row" style="gap:10px"><div class="dc-main" style="min-width:0"><b class="ellipsis">${esc(item.title)}</b><em class="ellipsis">${esc([item.artist, item.duration ? fmt(item.duration) : '', item.source].filter(Boolean).join(' · '))}</em>
+    ${status === 'review' ? `<span class="muted">Possible match · ${esc(match.title)} · ${esc(match.artist)} · ${match.duration ? fmt(match.duration) : 'Unknown duration'}</span>` : ''}</div>
+    <div><span class="dc-have">${checkLabels[status]}</span>
+    ${key ? `<button class="btn small" data-play-list="${key}" data-i="0">Play</button>` : ''}
+    ${status === 'review' ? `<button class="btn small" data-action="check-decision" data-i="${i}">Decide</button>` : ''}
+    ${list.decisions?.[i] ? `<button class="btn small" data-action="check-reset" data-i="${i}">Reset</button>` : ''}</div></div>`;
+  }).join('');
+  return head + form + `<section class="section"><label for="check-list">Saved lists</label><select id="check-list" class="input">${CHECK.lists.map(l => `<option value="${esc(l.id)}" ${l.id === list.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>
+  ${loading ? '<p class="note" role="status">Checking your synced library…</p>' : `<p class="note">${checkLibraryFailed ? 'Sync failed. Results use the available library. ' : ''}Checked against ${count(S.tracks.size)}. Saved lists stay on this device.</p>
+  <div class="chips">${Object.entries(checkLabels).map(([key, label]) => `<button class="chip ${CHECK.filter === key ? 'on' : ''}" aria-pressed="${CHECK.filter === key}" data-action="check-filter" data-filter="${key}">${label} · ${key === 'all' ? all.length : all.filter(row => row.status === key).length}</button>`).join('')}</div>
+  <input id="check-query" class="input full" aria-label="Filter playlist check" placeholder="Filter song, artist or playlist" value="${esc(CHECK.query)}">
+  <div class="row-actions"><button class="btn small" data-action="check-export">Export missing CSV</button><button class="btn small" data-action="check-copy">Copy missing batch</button></div>
+  <div class="dc-list">${results || '<p class="note">No songs in this view.</p>'}</div>
+  ${filtered.length > 100 ? `<div class="row-actions"><button class="btn small" data-action="check-page" data-page="${page - 1}" ${page === 0 ? 'disabled' : ''}>Previous</button><span>Page ${page + 1} of ${Math.ceil(filtered.length / 100)}</span><button class="btn small" data-action="check-page" data-page="${page + 1}" ${page + 1 >= Math.ceil(filtered.length / 100) ? 'disabled' : ''}>Next</button></div>` : ''}`}</section>`;
+}
+
+async function checkExport(copy) {
+  const list = checkSelected();
+  if (!list || checkLoading()) return;
+  const rows = checkResults(list).filter(row => row.status === 'missing').map(row => row.item);
+  if (!rows.length) return toast('No missing tracks to export.');
+  if (copy) {
+    const batch = CHECK.filter === 'missing' && !CHECK.query ? Math.min(CHECK.page, Math.ceil(rows.length / 100) - 1) : 0;
+    const selected = rows.slice(batch * 100, (batch + 1) * 100);
+    const text = selected.map(t => [t.artist, t.title].filter(Boolean).join(' - ')).join('\n');
+    try { await navigator.clipboard.writeText(text); toast(`Copied ${selected.length} missing tracks`); }
+    catch { sheet('<h2>Missing tracks</h2><textarea class="input full" readonly rows="10">' + esc(text) + '</textarea>'); }
+    return;
+  }
+  const csv = value => '"' + String(value || '').replace(/^[=+\-@\t\r]/, "'$&").replaceAll('"', '""') + '"';
+  const text = [['ID', 'Song', 'Artist', 'Duration', 'Source playlist', 'Track URL'], ...rows.map(t => [t.id, t.title, t.artist, t.duration, t.source, t.url])].map(row => row.map(csv).join(',')).join('\r\n');
+  const url = URL.createObjectURL(new Blob(['\uFEFF', text], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a'); link.href = url; link.download = 'FOF-Music-Missing.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const addTabs = on => `<div class="seg q-seg add-tabs"><a class="${on === 'discover' ? 'on' : ''}" href="#/import">Discover</a><a class="${on === 'want' ? 'on' : ''}" href="#/import/want">${wantTabLabel()}</a><a class="${on === 'check' ? 'on' : ''}" href="#/import/check">Playlist Check</a><a class="${on === 'files' ? 'on' : ''}" href="#/import/files">Add files</a></div>`;
 function ownedKeys() {
   if (DC.owned && DC.ownedAt === S.tracks.size) return DC.owned;
   const m = new Set();
