@@ -199,7 +199,7 @@ async function boot() {
   route();
   updateModes();
   backfillArt();
-  repairMatches().then(recleanNames).then(() => scanFolder()).then(identifyLibrary).then(() => fillGenres());
+  repairMatches().then(recleanNames).then(restoreTags).then(() => scanFolder()).then(identifyLibrary).then(() => fillGenres());
   initCloud();
   checkVersion();
   setInterval(checkVersion, 10 * 60 * 1000);
@@ -2140,6 +2140,15 @@ async function identifyLibraryNow() {
   await kv.set('identify-v2', true);
   S.ver++; render();
   if (found) toast(`Identified ${count(found)} by sound and fixed their names and artwork`);
+}
+/** One-time repair: songs whose own tags were right ("Sugarcane - Remix" by Camidoh) but were split into the wrong title and artist. */
+function restoreTags() { return oneTab('identify', restoreTagsNow); }
+async function restoreTagsNow() {
+  if (await kv.get('restore-tags-v1')) return;
+  const todo = [...S.tracks.values()].filter(t => !t.edited && t.original && meta.isReliable(t.original) && (t.title !== t.original.title || t.artist !== meta.tidyArtist(t.original.artist)));
+  for (const t of todo) { try { await rematch(t, { keepMatch: false }); } catch (e) { console.warn('restore', e); } await new Promise(r => setTimeout(r, 1200)); }
+  await kv.set('restore-tags-v1', true);
+  if (todo.length) { S.ver++; render(); toast(`Put back the proper names on ${count(todo.length)}`); }
 }
 /** One-time clean-up with the improved name rules (download-site labels, joined artist + title, odd characters). */
 async function recleanNames() {
