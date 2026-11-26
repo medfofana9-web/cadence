@@ -1,5 +1,6 @@
 import { db, kv, persist, storageInfo, isQuotaError } from './lib/store.js';
 import * as meta from './lib/meta.js';
+import { findSong, fetchFirstImage } from './lib/identify.js';
 import * as cloud from './lib/cloud.js';
 import { Engine, IS_IOS } from './lib/engine.js';
 import { Index, fold } from './lib/search.js';
@@ -10,7 +11,7 @@ import { thumbnail, artColors } from './lib/image.js';
    ===================================================================== */
 const S = {
   tracks: new Map(), playlists: new Map(), art: new Map(), thumbs: new Map(), plCovers: new Map(),
-  history: [], log: [], ctxs: [], searches: [], dupIgnore: [], channels: [], folder: null, folderState: '',
+  history: [], log: [], ctxs: [], searches: [], dupIgnore: [], channels: [], fixes: { artists: {}, names: {} }, folder: null, folderState: '',
   lists: {}, vlists: {}, route: 'home', param: '', settings: {}, version: null, user: null,
   scroll: {}, freshNav: false, index: new Index(), indexDirty: true, lastSync: 0, ver: 0,
 };
@@ -21,7 +22,7 @@ const P = {
   listen: null, preloadFor: null, fadeStarted: false,
 };
 const DEFAULTS = {
-  autoplay: true, accent: 'fof', autoFix: true, volume: 1, theme: 'dark', density: 'comfortable', reduceMotion: false,
+  autoplay: true, accent: 'fof', autoFix: true, askUnsure: false, volume: 1, theme: 'dark', density: 'comfortable', reduceMotion: false,
   crossfade: 0, gapless: true, leveling: true, hideExplicit: false, keepHistory: true, songSort: 'added', songDir: -1,
 };
 const ACCENTS = { fof: ['#ff2e3e', '255,46,62', '#ffffff'], coral: ['#ff6a4d', '255,106,77', '#1a0703'], amber: ['#f5b041', '245,176,65', '#1d1302'], sky: ['#5ab4ff', '90,180,255', '#03121f'], mint: ['#4fd1a1', '79,209,161', '#02180f'], lilac: ['#b69cff', '182,156,255', '#120a24'], rose: ['#ff5c8a', '255,92,138', '#22040f'] };
@@ -138,7 +139,7 @@ function queueStatePush() {
   clearTimeout(pushT);
   pushT = setTimeout(() => {
     const { volume, ...settings } = S.settings;
-    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
+    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
   }, 4000);
 }
 
@@ -156,7 +157,7 @@ async function boot() {
   for (const [id, p] of pls) S.playlists.set(id, p);
   for (const [id, b] of arts) (id.startsWith('pl:') ? S.plCovers : S.art).set(id.replace(/^pl:/, ''), URL.createObjectURL(b));
   for (const [id, b] of thumbs) S.thumbs.set(id, URL.createObjectURL(b));
-  [S.history, S.log, S.ctxs, S.searches, S.dupIgnore, S.settingsAt, S.channels, S.folder] = await Promise.all([kv.get('history', []), kv.get('log', []), kv.get('ctxs', []), kv.get('searches', []), kv.get('dupIgnore', []), kv.get('settingsAt', 0), kv.get('channels', []), kv.get('folder', null)]);
+  [S.history, S.log, S.ctxs, S.searches, S.dupIgnore, S.settingsAt, S.channels, S.folder, S.fixes] = await Promise.all([kv.get('history', []), kv.get('log', []), kv.get('ctxs', []), kv.get('searches', []), kv.get('dupIgnore', []), kv.get('settingsAt', 0), kv.get('channels', []), kv.get('folder', null), kv.get('fixes', { artists: {}, names: {} })]);
   engine.setVolume(S.settings.volume ?? 1);
   $('#p-vol').value = Math.round((S.settings.volume ?? 1) * 100); paintRange($('#p-vol'));
   const saved = await kv.get('player', null);
@@ -173,7 +174,7 @@ async function boot() {
   route();
   updateModes();
   backfillArt();
-  repairMatches().then(recleanNames).then(() => scanFolder()).then(() => fillGenres());
+  repairMatches().then(recleanNames).then(() => scanFolder()).then(identifyLibrary).then(() => fillGenres());
   initCloud();
   checkVersion();
   setInterval(checkVersion, 10 * 60 * 1000);
@@ -251,6 +252,7 @@ function mergeState(d) {
   if (d.searches && !S.searches.length) S.searches = d.searches;
   if (d.dupIgnore) S.dupIgnore = [...new Set([...S.dupIgnore, ...d.dupIgnore])];
   if (d.channels) { S.channels = [...new Set([...S.channels, ...d.channels])]; kv.set('channels', S.channels); }
+  if (d.fixes) { S.fixes = { artists: { ...d.fixes.artists, ...S.fixes.artists }, names: { ...d.fixes.names, ...S.fixes.names } }; kv.set('fixes', S.fixes); }
   if (d.settings && (d.settingsAt || 0) > (S.settingsAt || 0)) { S.settings = { ...S.settings, ...d.settings }; S.settingsAt = d.settingsAt; kv.set('settings', S.settings); kv.set('settingsAt', S.settingsAt); applySettings(); }
   kv.set('log', S.log); kv.set('history', S.history); kv.set('ctxs', S.ctxs); kv.set('dupIgnore', S.dupIgnore);
 }
@@ -885,6 +887,7 @@ VIEWS.insights = () => {
    Review tray: songs Fof Music isn't sure about
    ===================================================================== */
 function needsReview(t) {
+  if (!S.settings.askUnsure) return false; // songs that can't be identified keep their cleaned-up name
   if (t.reviewed || t.edited || t.matched) return false;
   if (t.artist === 'Unknown Artist' || meta.looksLikeChannel(t.artist, S.channels)) return true;
   if (t.category !== 'Music') return false;
@@ -918,7 +921,7 @@ VIEWS.review = () => {
 async function saveReview(id, { approve = false } = {}) {
   const t = S.tracks.get(id); const row = document.querySelector(`[data-rv="${id}"]`); if (!t || !row) return;
   const title = row.querySelector('[data-f=title]').value.trim(), artist = row.querySelector('[data-f=artist]').value.trim();
-  const before = t.artist;
+  const before = t.artist, beforeTitle = t.title;
   if (title) t.title = title;
   t.artist = artist || 'Unknown Artist';
   if (artist && before !== artist) {
@@ -929,6 +932,7 @@ async function saveReview(id, { approve = false } = {}) {
   }
   if (artist && before !== artist && t.original?.artist && fold(t.original.artist) === fold(before) && !S.channels.includes(before) && meta.looksLikeChannel(before)) { S.channels.push(before); kv.set('channels', S.channels); }
   t.category = meta.categorize(t);
+  learnFix(t, { title: beforeTitle, artist: before });
   if (approve) t.reviewed = true;
   if (t.designedCover && (title || artist)) { const art = await meta.makeCover(t.title, t.artist, t.category); await setArt(t, art); }
   S.ver++; await saveTrack(t);
@@ -1083,8 +1087,8 @@ async function importOne(j, known) {
   }
   known.hashes.add(hash);
   const tags = await meta.readTags(f);
-  const names = meta.cleanNames(tags, f.name, knownArtists(), S.channels);
-  const reliable = meta.isReliable(tags);
+  const names = applyFixes(meta.cleanNames(tags, f.name, knownArtists(), S.channels), { file: f.name, title: tags.title });
+  const reliable = meta.isReliable(tags) || !!names.fixed;
   const t = {
     id: hash, hash, ...(reliable ? { title: tags.title, artist: tags.artist, album: tags.album } : names),
     albumArtist: tags.albumArtist || '', genre: meta.cleanGenre(tags.genre), year: tags.year || '', trackNo: tags.track || '', disc: tags.disc || '',
@@ -1101,12 +1105,12 @@ async function importOne(j, known) {
   if (!t.duration && !/\.(mp3|m4a|aac|wav|flac|ogg|opus|webm)$/i.test(f.name)) throw new Error('unplayable');
   let artBlob = tags.picture?.size > 2000 ? tags.picture : null;
   if (S.settings.autoFix && t.category === 'Music' && (!reliable || !artBlob)) {
-    j.status = 'Finding artwork'; updateImportRow(j);
-    const found = await meta.lookup({ title: t.title, artist: t.artist, duration: t.duration }) || await meta.identify(`${t.artist === 'Unknown Artist' ? '' : t.artist} ${t.title}`.trim(), t.duration);
+    j.status = 'Identifying'; updateImportRow(j);
+    const found = await findSong({ title: t.title, artist: t.artist }, { blob: f, duration: t.duration }).catch(() => null);
     if (found) {
-      if (!reliable) Object.assign(t, { title: found.title, artist: found.artist, album: found.album || t.album });
-      Object.assign(t, { genre: t.genre || found.genre || '', year: t.year || found.year || '', explicit: found.explicit, matched: true });
-      if (!artBlob || !reliable) try { artBlob = await meta.fetchImage(found.artUrl); } catch {}
+      if (!reliable) Object.assign(t, { title: found.title, artist: meta.tidyArtist(found.artist), album: found.album || t.album });
+      Object.assign(t, { genre: t.genre || found.genre || '', year: t.year || found.year || '', explicit: found.explicit, matched: true, matchedVia: found.via });
+      if (!artBlob || !reliable) artBlob = await fetchFirstImage(found.artUrls) || artBlob;
     }
   }
   if (!artBlob) { artBlob = await meta.makeCover(t.title, t.artist, t.category); t.designedCover = true; }
@@ -1388,10 +1392,11 @@ VIEWS.settings = () => {
       ${sw('leveling', 'Volume leveling', 'Evens out loud and quiet songs using loudness info saved in your files (ReplayGain). Songs without it play as they are.')}
       ${sw('hideExplicit', 'Hide explicit songs', 'Uses Apple’s explicit labels found during import. Songs without a label are not hidden.')}</div>`,
     library: () => { const dups = duplicateGroups().length; const local = [...S.tracks.values()].filter(t => t.local).length; return `<div class="settings-group">
-      ${sw('autoFix', 'Fix names and artwork on import', 'Cleans up titles like “Official Video” and looks up album artwork. Songs with complete tags keep their own names.')}
+      ${sw('autoFix', 'Fix names and artwork on import', 'Recognizes each song by its sound, then checks Apple Music and Deezer for the real name and album artwork. Songs with complete tags keep their own names.')}
       <div class="set-row"><div class="lbl"><b>Fix all songs again</b><span>Re-checks names and artwork for songs you haven’t edited yourself</span></div><button class="btn" data-action="refix-all">Fix all</button></div>
       ${CAN_WATCH ? `<div class="set-row"><div class="lbl"><b>Auto-import folder</b><span>${S.folder ? `Watching “${esc(S.folder.name)}”` : 'Not connected. New songs saved to a folder you pick are added automatically.'}</span></div>${S.folder ? '<button class="btn ghost" data-action="disconnect-folder">Stop watching</button>' : '<button class="btn" data-action="connect-folder">Connect folder</button>'}</div>` : ''}
-      <div class="set-row"><div class="lbl"><b>Check these</b><span>${reviewList().length ? `${count(reviewList().length)} with names Fof Music isn’t sure about` : 'Nothing to check'}</span></div><a class="btn" href="#/review">Open</a></div>
+      ${sw('askUnsure', 'Ask me about songs it can’t identify', 'Off: songs that aren’t found by sound or in Apple Music or Deezer keep their cleaned-up name and a designed cover. On: they’re listed in Check these.')}
+      ${S.settings.askUnsure ? `<div class="set-row"><div class="lbl"><b>Check these</b><span>${reviewList().length ? `${count(reviewList().length)} with names Fof Music isn’t sure about` : 'Nothing to check'}</span></div><a class="btn" href="#/review">Open</a></div>` : ''}
       ${S.channels.length ? `<div class="set-row"><div class="lbl"><b>Channels, not artists</b><span>${S.channels.map(esc).join(', ')}</span></div><button class="btn ghost" data-action="clear-channels">Reset</button></div>` : ''}
       <div class="set-row"><div class="lbl"><b>Possible duplicates</b><span>${dups ? `${dups} group${dups > 1 ? 's' : ''} to review` : 'None found'}</span></div><a class="btn" href="#/duplicates">Review</a></div>
       <div class="set-row"><div class="lbl"><b>Storage on this device</b><span id="storage-used">${count(local)} saved here</span></div>${S.user ? '<button class="btn ghost" data-action="clear-device">Remove downloads</button>' : ''}</div></div>`; },
@@ -1950,6 +1955,7 @@ function editSheet(id) {
       t.moods = [...el.querySelectorAll('#ed-moods .chip.on')].map(b => b.dataset.m);
       Object.assign(t, { title: v('title').value.trim() || t.title, artist: v('artist').value.trim() || 'Unknown Artist', album: v('album').value.trim(), albumArtist: v('albumArtist').value.trim(), genre: v('genre').value.trim(), year: v('year').value.trim(), trackNo: v('trackNo').value.trim(), category: v('cat').value, edited: true });
       t.edits = [...(t.edits || []), { at: Date.now(), before: prev }].slice(-10);
+      learnFix(t, prev);
       await db.del('lyrics', t.id);
       if (newArt) { await setArt(t, newArt); t.designedCover = false; if (S.user && t.cloud) cloud.uploadFile('art/' + t.id, newArt).catch(syncFailed); }
       S.ver++; await saveTrack(t);
@@ -1973,6 +1979,22 @@ function confirmDelete(id) {
     if (qi >= 0) { P.queue.splice(qi, 1); if (qi < P.idx) P.idx--; else if (qi === P.idx) { engine.el.pause(); P.idx = Math.min(P.idx, P.queue.length - 1); if (P.queue.length) loadTrack(P.queue[P.idx], { autoplay: false }); } savePlayer(); }
     render(); toast('Removed from your library');
   });
+}
+/* Corrections you make are remembered: the same file name, or the same wrong artist, is fixed the same way next time. */
+const fixKey = o => fold(meta.prepRaw(String(o.file || o.title || '').replace(/\.[^.]+$/, '')));
+function applyFixes(base, o) {
+  const n = S.fixes.names[fixKey(o)]; if (n) return { ...base, ...n, fixed: true };
+  const a = S.fixes.artists[fold(base.artist || '')]; return a ? { ...base, artist: a } : base;
+}
+function learnFix(t, before) {
+  if (before.title === t.title && before.artist === t.artist) return;
+  const o = t.original || {};
+  const k = fixKey({ file: o.file || t.file, title: o.title }); if (k) S.fixes.names[k] = { title: t.title, artist: t.artist };
+  // a wrong artist is remembered only when no confirmed song in the library really is by that artist
+  const wrong = before.artist;
+  if (wrong && wrong !== t.artist && !/^unknown/i.test(wrong) && !/^unknown/i.test(t.artist) && ![...S.tracks.values()].some(x => x !== t && x.artist === wrong && (x.matched || x.edited || x.reviewed))) S.fixes.artists[fold(wrong)] = t.artist;
+  const names = Object.entries(S.fixes.names); if (names.length > 3000) S.fixes.names = Object.fromEntries(names.slice(-3000));
+  kv.set('fixes', S.fixes); queueStatePush();
 }
 /** Artist names already in your library, used to split names like "Benny the Butcher x Drake Buffalo". */
 function knownArtists() {
@@ -2000,15 +2022,16 @@ async function fileArt(t) {
 async function rematch(t, { online = navigator.onLine } = {}) {
   const o = await originalOf(t);
   const reliable = meta.isReliable(o);
-  const base = reliable ? { title: o.title, artist: o.artist, album: o.album } : meta.cleanNames(o, o.file || t.file || '', knownArtists().filter(a => a !== t.artist), S.channels);
+  const base = reliable ? { title: o.title, artist: o.artist, album: o.album } : applyFixes(meta.cleanNames(o, o.file || t.file || '', knownArtists().filter(a => a !== t.artist), S.channels), o);
   const music = meta.categorize({ ...t, ...base }) === 'Music';
-  const found = online && music ? (await meta.lookup({ ...base, duration: t.duration }) || await meta.identify(`${base.artist === 'Unknown Artist' ? '' : base.artist} ${base.title}`.trim(), t.duration)) : null;
+  const blob = online && music && t.local ? await db.get('audio', t.id).catch(() => null) : null;
+  const found = online && music ? await findSong(base, { blob, duration: t.duration }).catch(() => null) : null;
   let art = null;
   if (found) {
-    Object.assign(t, reliable ? base : { title: found.title, artist: found.artist, album: found.album || base.album });
-    Object.assign(t, { genre: meta.cleanGenre(o.genre) || found.genre || '', year: found.year || t.year, explicit: found.explicit, matched: true });
+    Object.assign(t, reliable || base.fixed ? { title: base.title, artist: base.artist, album: base.album || found.album } : { title: found.title, artist: found.artist, album: found.album || base.album });
+    Object.assign(t, { genre: meta.cleanGenre(o.genre) || found.genre || '', year: found.year || t.year, explicit: found.explicit, matched: true, matchedVia: found.via });
     art = await fileArt(t);
-    if (!art || !reliable) try { art = await meta.fetchImage(found.artUrl); } catch {}
+    if (!art || !reliable) art = await fetchFirstImage(found.artUrls) || art;
   } else {
     Object.assign(t, base, { genre: meta.cleanGenre(o.genre), year: reliable ? t.year : '', explicit: undefined, matched: false });
     art = await fileArt(t);
@@ -2037,6 +2060,17 @@ async function repairMatches() {
   for (const t of bad) await rematch(t);
   await kv.set('repair-v2', true);
   if (bad.length) { S.ver++; render(); toast(`Fixed ${count(bad.length)} that had the wrong artist or artwork`); }
+}
+/** One-time pass: songs without a confirmed match are listened to and looked up again (on the device that has the files). */
+async function identifyLibrary() {
+  if (await kv.get('identify-v1') || !navigator.onLine) return;
+  const todo = [...S.tracks.values()].filter(t => t.local && !t.edited && !t.reviewed && (!t.matched || t.designedCover) && t.category === 'Music');
+  if (!todo.length) { await kv.set('identify-v1', true); return; }
+  let found = 0;
+  for (const t of todo) { if (!navigator.onLine) return; try { if (await rematch(t)) found++; } catch (e) { console.warn('identify', e); } }
+  await kv.set('identify-v1', true);
+  S.ver++; render();
+  if (found) toast(`Identified ${count(found)} by sound and fixed their names and artwork`);
 }
 /** One-time clean-up with the improved name rules (download-site labels, joined artist + title, odd characters). */
 async function recleanNames() {
@@ -2184,7 +2218,7 @@ document.addEventListener('click', async e => {
       case 'imp-retry': return importFiles(IMP.jobs.filter(j => j.state === 'error').map(j => j.file), { retry: true });
       case 'imp-clear': IMP.jobs = []; return render();
       case 'sort-col': { const k = a.dataset.sort; if (S.settings.songSort === k) S.settings.songDir *= -1; else { S.settings.songSort = k; S.settings.songDir = ['title', 'artist', 'album'].includes(k) ? 1 : -1; } await saveSettings(); return render(); }
-      case 'toggle-setting': S.settings[a.dataset.key] = !S.settings[a.dataset.key]; a.classList.toggle('on', S.settings[a.dataset.key]); S.settingsAt = Date.now(); kv.set('settingsAt', S.settingsAt); await saveSettings(); if (['hideExplicit'].includes(a.dataset.key)) { S.ver++; S.indexDirty = true; render(); } return;
+      case 'toggle-setting': S.settings[a.dataset.key] = !S.settings[a.dataset.key]; a.classList.toggle('on', S.settings[a.dataset.key]); S.settingsAt = Date.now(); kv.set('settingsAt', S.settingsAt); await saveSettings(); if (['hideExplicit'].includes(a.dataset.key)) { S.ver++; S.indexDirty = true; render(); } if (a.dataset.key === 'askUnsure') { renderBadge(); render(); } return;
       case 'set': S.settings[a.dataset.key] = a.dataset.val; S.settingsAt = Date.now(); kv.set('settingsAt', S.settingsAt); await saveSettings(); return render();
       case 'back': return history.length > 1 ? history.back() : go('home');
       case 'clear-searches': S.searches = []; kv.set('searches', []); return render();
