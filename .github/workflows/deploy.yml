@@ -28,6 +28,8 @@ jobs:
           echo "{\"version\":\"${GITHUB_SHA}\"}" > version.json
           # every file name carries the version, so an update replaces all of them at once (no half-old screens)
           V="${GITHUB_SHA:0:8}"
+          sed -i "s/^const BUILD = 'dev';/const BUILD = '${GITHUB_SHA}';/" app.js
+          grep -c "const BUILD = '${GITHUB_SHA}'" app.js
           sed -i "s#href=\"styles.css\"#href=\"styles.css?v=$V\"#; s#src=\"app.js\"#src=\"app.js?v=$V\"#" index.html
           for f in app.js config.js lib/*.js; do sed -i -E "s#(from '[^']+\.js)'#\1?v=$V'#g; s#(import\('[^']+\.js)'\)#\1?v=$V')#g" "$f"; done
           grep -c "?v=$V" index.html app.js

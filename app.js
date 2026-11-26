@@ -5,6 +5,8 @@ import * as cloud from './lib/cloud.js';
 import { Engine, IS_IOS } from './lib/engine.js';
 import { Index, fold } from './lib/search.js';
 import { thumbnail, artColors } from './lib/image.js';
+/** The version these files belong to (stamped when published); a phone holding older files updates itself. */
+const BUILD = 'dev';
 /** Running inside the Fof Music iPhone app rather than a browser. */
 const IN_APP = !!window.Capacitor?.isNativePlatform?.() || /FofMusicApp/.test(navigator.userAgent);
 
@@ -349,6 +351,11 @@ async function checkVersion() {
     const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) return;
     const { version } = await r.json();
+    // these files are older than what's published (a cached copy): refresh once, right away
+    if (BUILD !== 'dev' && version !== BUILD && engine.el.paused) {
+      let tried = ''; try { tried = sessionStorage.getItem('fof-fresh') || ''; } catch {}
+      if (tried !== version) { try { sessionStorage.setItem('fof-fresh', version); } catch {} return applyUpdate(); }
+    }
     if (!S.version) S.version = version;
     else if (version !== S.version) { if (IN_APP && engine.el.paused && !IMP.running) return applyUpdate(); $('#update-bar').classList.add('show'); }
   } catch {}
