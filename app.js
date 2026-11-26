@@ -1,6 +1,6 @@
 import { db, kv, persist, storageInfo, isQuotaError } from './lib/store.js';
 import * as meta from './lib/meta.js';
-import { findSong, fetchFirstImage, artistPhoto, artistTop } from './lib/identify.js';
+import { findSong, fetchFirstImage, artistPhoto, artistTop, dz } from './lib/identify.js';
 import * as cloud from './lib/cloud.js';
 import { Engine, IS_IOS } from './lib/engine.js';
 import { NativeAudio } from './lib/native.js';
@@ -414,7 +414,7 @@ function route() {
   const i = h.indexOf('/');
   S.route = i < 0 ? h : h.slice(0, i);
   S.param = i < 0 ? '' : h.slice(i + 1);
-  const libRoutes = ['songs', 'artists', 'albums', 'liked', 'playlist', 'artist', 'album', 'library', 'smart', 'insights', 'duplicates', 'history', 'replay', 'import'];
+  const libRoutes = ['songs', 'artists', 'albums', 'liked', 'playlist', 'artist', 'album', 'library', 'smart', 'insights', 'duplicates', 'history', 'replay', 'import', 'dz-artist', 'dz-album'];
   $$('[data-route]').forEach(a => {
     const r = a.dataset.route;
     a.classList.toggle('active', r === S.route || (r === 'library' && libRoutes.includes(S.route)) || (r === 'podcasts' && ['show', 'topic'].includes(S.route)));
@@ -440,7 +440,7 @@ function render() {
 function afterRender() {
   if (S.route === 'search') { const i = $('#search-input'); if (i && document.activeElement !== i && !('ontouchstart' in window)) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
   if (S.route === 'search') refreshDiscover();
-  if (S.route === 'import') bindImport();
+  if (S.route === 'import') { if ($('#drop')) bindImport(); bindDiscover(); }
   if (S.route === 'podcasts') bindPodSearch();
   if (S.route === 'quran' || S.route === 'reciters') bindQuran();
   paintTime();
@@ -1214,10 +1214,11 @@ VIEWS.duplicates = () => {
    ===================================================================== */
 const IMP = { jobs: [], cancel: false, running: false, found: 0, added: 0, skipped: 0, failed: 0, maybeDup: 0 };
 VIEWS.import = () => {
+  if (S.param !== 'files' && !IMP.jobs.length) return discoverView();
   const signedOut = cloud.cloudConfigured() && !S.user;
   const st = IMP;
   const failed = st.jobs.filter(j => j.state === 'error');
-  return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Add music</h1><div class="lede">MP3, M4A, AAC, FLAC or WAV</div></div></div>
+  return `<div class="page-head"><div><h1>Add Music</h1></div></div>${addTabs('files')}<div class="lede add-lede">MP3, M4A, AAC, FLAC or WAV</div>
     <div class="drop" id="drop">
       <div class="drop-icon"><svg><use href="#i-upload"/></svg></div>
       <div class="drop-text"><h2>${IS_IOS ? 'Add songs from Files' : 'Drop a folder or songs here'}</h2><p>${IS_IOS ? 'Choose songs from Files.' : 'Drop songs or a folder here.'}</p></div>
@@ -2592,6 +2593,7 @@ document.addEventListener('click', async e => {
       case 'pod-play': return podPlay(id);
       case 'artist-more': e.preventDefault(); return artistSheet();
       case 'dz-preview': return dzPreview(a);
+      case 'dc-type': DC.type = id; DC.results = null; render(); return dcSearch();
       case 'yt': { e.stopPropagation(); dzStop(false); const url = 'https://www.youtube.com/results?search_query=' + encodeURIComponent(a.dataset.q + ' official video'); if (IN_APP) location.href = url; else window.open(url, '_blank', 'noopener'); return; }
       case 'go-artist': { closeSheet?.(); closeNow(); return setTimeout(() => go('artist/' + encodeURIComponent(a.dataset.name)), 60); }
       case 'rp-story': return replayStory();
@@ -3382,7 +3384,7 @@ async function fillDiscover() {
 const DZ = { el: null, url: '', resume: false };
 function dzStop(resume = true) {
   if (DZ.el) { DZ.el.pause(); DZ.el = null; }
-  DZ.url = ''; $$('.am-dz-row').forEach(r => { r.classList.remove('previewing'); r.querySelector('.am-dz-btn').innerHTML = icon('play'); });
+  DZ.url = ''; $$('.am-dz-row').forEach(r => { r.classList.remove('previewing'); const b = r.querySelector('.am-dz-btn'); if (b) b.innerHTML = icon('play'); });
   if (resume && DZ.resume) engine.el.play();
   DZ.resume = false;
 }
@@ -3399,3 +3401,113 @@ function dzPreview(row) {
   DZ.el.play().catch(() => dzStop());
 }
 for (const el of engine.els) el.addEventListener('play', () => { if (DZ.el) dzStop(false); });
+
+/* =====================================================================
+   Discover (Add Music): suggestions from your library, and search any song
+   ===================================================================== */
+const DC = { q: '', type: 'track', results: null, sugg: null, loading: false, n: 0 };
+const addTabs = on => `<div class="seg q-seg add-tabs"><a class="${on === 'discover' ? 'on' : ''}" href="#/import">Discover</a><a class="${on === 'files' ? 'on' : ''}" href="#/import/files">Add files</a></div>`;
+function ownedKeys() {
+  if (DC.owned && DC.ownedAt === S.tracks.size) return DC.owned;
+  const m = new Set();
+  for (const t of visible()) { const ti = nrm(t.title); m.add(ti + '|' + nrm(mainArtist(t.artist))); for (const a of artistCredits(t.artist)) m.add(ti + '|' + nrm(a)); }
+  DC.owned = m; DC.ownedAt = S.tracks.size; return m;
+}
+const owns = (title, artist) => ownedKeys().has(nrm(title) + '|' + nrm(artist));
+const dzTrack = r => ({ id: r.id, title: r.title_short || r.title, artist: r.artist?.name || '', album: r.album?.title || '', art: r.album?.cover_medium || r.album?.cover || '', preview: r.preview || '' });
+/** One song row: preview on the cover, YouTube button, or "In library". */
+function dcRow(r) {
+  const have = owns(r.title, r.artist);
+  return `<div class="dc-row${have ? '' : ' am-dz-row'}" ${have || !r.preview ? '' : `data-action="dz-preview" data-url="${esc(r.preview)}"`}>
+    <span class="am-dz-art dc-art"><img loading="lazy" src="${esc(r.art)}" alt="">${have || !r.preview ? '' : `<span class="am-dz-btn">${icon(DZ.url === r.preview ? 'pause' : 'play')}</span>`}</span>
+    <span class="dc-main"><b class="ellipsis">${esc(r.title)}</b><em class="ellipsis">${esc(r.artist)}${r.album ? ' · ' + esc(r.album) : ''}</em></span>
+    ${have ? '<span class="dc-have">In library</span>' : `<button class="am-yt" data-action="yt" data-q="${esc(r.artist + ' ' + r.title)}" aria-label="Watch on YouTube"><svg viewBox="0 0 28 20"><rect width="28" height="20" rx="5.5" fill="#ff0033"/><path d="M11.2 6v8l7-4z" fill="#fff"/></svg></button>`}</div>`;
+}
+function dcCard(r) {
+  return `<div class="dc-card am-dz-row" data-action="dz-preview" data-url="${esc(r.preview)}"><span class="am-dz-art dc-cover"><img loading="lazy" src="${esc(r.art).replace('/250x250-', '/500x500-')}" alt=""><span class="am-dz-btn">${icon(DZ.url === r.preview ? 'pause' : 'play')}</span></span>
+    <div class="dc-card-t"><span class="dc-main"><b class="ellipsis">${esc(r.title)}</b><em class="ellipsis">${esc(r.artist)}</em></span><button class="am-yt" data-action="yt" data-q="${esc(r.artist + ' ' + r.title)}" aria-label="Watch on YouTube"><svg viewBox="0 0 28 20"><rect width="28" height="20" rx="5.5" fill="#ff0033"/><path d="M11.2 6v8l7-4z" fill="#fff"/></svg></button></div></div>`;
+}
+async function dzArtistId(name) {
+  DC.aid = DC.aid || new Map(); if (DC.aid.has(name)) return DC.aid.get(name);
+  const s = await dz('search/artist?limit=5&q=' + encodeURIComponent(name)); const w = nrm(name);
+  const a = (s?.data || []).find(x => nrm(x.name) === w); DC.aid.set(name, a?.id || 0); return a?.id || 0;
+}
+const DZ_GENRES = [[/afro|african|amapiano|highlife|coupe|zouk|ndombolo|bongo/i, 2], [/hip.?hop|rap|drill|trap/i, 116], [/r&b|rnb|soul/i, 165], [/pop/i, 132], [/reggae|dancehall/i, 144], [/dance|house|edm|electro/i, 113], [/latin|reggaeton/i, 197], [/rock/i, 152], [/jazz/i, 129], [/gospel|christian/i, 173]];
+async function loadSuggestions() {
+  const all = visible().filter(t => (t.category || 'Music') === 'Music');
+  const score = new Map(); for (const t of all) { const a = mainArtist(t.artist); if (/^unknown/i.test(a)) continue; score.set(a, (score.get(a) || 0) + (t.plays || 0) * 2 + (t.liked ? 6 : 0) + 1); }
+  const fav = [...score].sort((a, b) => b[1] - a[1]).map(x => x[0]);
+  const out = { because: [], loved: [], genre: null };
+  const seen = new Set(); const keep = r => { const k = nrm(r.title) + '|' + nrm(r.artist); if (seen.has(k) || owns(r.title, r.artist) || !r.preview) return false; seen.add(k); return true; };
+  // because you play your top artists: their related artists' biggest songs
+  for (const name of fav.slice(0, 3)) {
+    const id = await dzArtistId(name); if (!id) continue;
+    const rel = (await dz(`artist/${id}/related?limit=8`))?.data || [];
+    const picks = [];
+    for (const a of rel.slice(0, 8)) { const top = ((await dz(`artist/${a.id}/top?limit=3`))?.data || []).map(r => ({ ...dzTrack(r), artist: r.artist?.name || a.name })).filter(keep); if (top[0]) picks.push(top[0]); }
+    if (picks.length >= 3) out.because.push({ name, items: picks });
+    if (out.because.length >= 2) break;
+  }
+  // more from the artists you play most
+  for (const name of fav.slice(0, 8)) { const id = await dzArtistId(name); if (!id) continue; const top = ((await dz(`artist/${id}/top?limit=10`))?.data || []).map(r => ({ ...dzTrack(r), artist: r.artist?.name || name })).filter(keep).slice(0, 2); out.loved.push(...top); }
+  // the chart for your favorite genre
+  const g = new Map(); for (const t of all) if (t.genre) g.set(t.genre, (g.get(t.genre) || 0) + 1 + (t.plays || 0));
+  const topG = [...g].sort((a, b) => b[1] - a[1]).map(x => x[0]).find(x => DZ_GENRES.some(([re]) => re.test(x)));
+  if (topG) { const gid = DZ_GENRES.find(([re]) => re.test(topG))[1]; const ch = ((await dz(`chart/${gid}/tracks?limit=40`))?.data || []).map(dzTrack).filter(keep).slice(0, 12); if (ch.length) out.genre = { name: topG, items: ch }; }
+  return out;
+}
+function discoverView() {
+  if (!DC.sugg && !DC.loading && navigator.onLine) { DC.loading = true; loadSuggestions().then(x => { DC.sugg = x; }).catch(e => { console.warn('discover', e); DC.sugg = { because: [], loved: [], genre: null }; }).finally(() => { DC.loading = false; if (S.route === 'import' && !DC.q) render(); }); }
+  const sg = DC.sugg;
+  const body = DC.q ? dcResults() : !sg ? `<div class="pod-loading">${navigator.onLine ? 'Finding songs for you…' : 'Connect to the internet to discover songs.'}</div>` : `
+    ${sg.because.map(b => `<section class="section"><div class="section-head"><h2>Because you play ${esc(b.name)}</h2></div><div class="shelf dc-shelf">${b.items.map(dcCard).join('')}</div></section>`).join('')}
+    ${sg.loved.length ? `<section class="section"><div class="section-head"><h2>More from artists you love</h2></div><div class="dc-list">${sg.loved.slice(0, 12).map(dcRow).join('')}</div></section>` : ''}
+    ${sg.genre ? `<section class="section"><div class="section-head"><h2>Popular in ${esc(sg.genre.name)}</h2></div><div class="shelf dc-shelf">${sg.genre.items.map(dcCard).join('')}</div></section>` : ''}
+    ${!sg.because.length && !sg.loved.length && !sg.genre ? '<p class="muted pod-none">Play a few songs and suggestions will show up here.</p>' : ''}`;
+  return `<div class="page-head"><div><h1>Add Music</h1></div></div>${addTabs('discover')}
+    <label class="search-box dc-search">${icon('search')}<input id="dc-q" class="input" type="search" placeholder="Search any song or artist" value="${esc(DC.q)}" autocomplete="off" enterkeyhint="search"></label>
+    ${DC.q ? `<div class="seg q-seg">${[['track', 'Songs'], ['artist', 'Artists'], ['album', 'Albums']].map(([k, l]) => `<button class="${DC.type === k ? 'on' : ''}" data-action="dc-type" data-id="${k}">${l}</button>`).join('')}</div>` : ''}
+    <div id="dc-body">${body}</div>`;
+}
+function dcResults() {
+  const r = DC.results;
+  if (!r) return '<div class="pod-loading">Searching…</div>';
+  if (!r.length) return `<p class="muted pod-none">Nothing found for “${esc(DC.q)}”.</p>`;
+  if (DC.type === 'track') return `<div class="dc-list">${r.map(dcRow).join('')}</div>`;
+  if (DC.type === 'artist') return `<div class="dc-list">${r.map(a => { const have = (groups('creditedArtist').get(a.name) || []).length; return `<a class="dc-row" href="#/dz-artist/${a.id}"><img class="dc-art round" loading="lazy" src="${esc(a.picture_medium || '')}" alt=""><span class="dc-main"><b class="ellipsis">${esc(a.name)}</b><em>${have ? `${count(have)} in your library` : 'Not in your library yet'}</em></span>${icon('back', 'chev')}</a>`; }).join('')}</div>`;
+  return `<div class="dc-list">${r.map(a => `<a class="dc-row" href="#/dz-album/${a.id}"><img class="dc-art" loading="lazy" src="${esc(a.cover_medium || '')}" alt=""><span class="dc-main"><b class="ellipsis">${esc(a.title)}</b><em class="ellipsis">${esc(a.artist?.name || '')} · ${a.nb_tracks || ''} songs</em></span>${icon('back', 'chev')}</a>`).join('')}</div>`;
+}
+async function dcSearch() {
+  const q = DC.q.trim(), my = ++DC.n; if (!q) return;
+  const path = DC.type === 'track' ? 'search' : 'search/' + DC.type;
+  const j = await dz(`${path}?limit=30&q=${encodeURIComponent(q)}`); if (my !== DC.n) return;
+  DC.results = DC.type === 'track' ? (j?.data || []).map(dzTrack) : (j?.data || []);
+  const b = $('#dc-body'); if (b) b.innerHTML = dcResults();
+}
+function bindDiscover() {
+  const i = $('#dc-q'); if (!i || i._b) return; i._b = true;
+  i.addEventListener('input', () => {
+    const had = !!DC.q; DC.q = i.value; DC.results = null; clearTimeout(i._t);
+    if (!DC.q.trim() || !had) { const pos = i.selectionStart; render(); const g = $('#dc-q'); g?.focus(); try { g.setSelectionRange(pos, pos); } catch {} }
+    if (DC.q.trim()) i._t = setTimeout(dcSearch, 250);
+  });
+}
+VIEWS['dz-artist'] = () => {
+  const id = S.param; DC.art = DC.art || new Map();
+  if (!DC.art.has(id)) { DC.art.set(id, null); Promise.all([dz('artist/' + id), dz(`artist/${id}/top?limit=50`)]).then(([a, t]) => { DC.art.set(id, { a, tracks: (t?.data || []).map(dzTrack) }); if (S.route === 'dz-artist') render(); }); }
+  const d = DC.art.get(id);
+  if (!d) return `${back()}<div class="pod-loading">Loading…</div>`;
+  const missing = d.tracks.filter(r => !owns(r.title, r.artist)), have = d.tracks.length - missing.length;
+  return `${back()}<div class="pod-head"><img class="round-img" src="${esc(d.a?.picture_big || '')}" alt=""><div><h1>${esc(d.a?.name || '')}</h1><div class="muted">${have ? `${have} of their top ${d.tracks.length} in your library` : 'None in your library yet'}</div>
+      ${groups('creditedArtist').has(d.a?.name) ? `<div class="pod-head-actions"><a class="btn" href="#/artist/${encodeURIComponent(d.a.name)}">Your songs</a></div>` : ''}</div></div>
+    <section class="section"><div class="section-head"><h2>Popular songs</h2></div><div class="dc-list">${d.tracks.map(dcRow).join('')}</div></section>`;
+};
+VIEWS['dz-album'] = () => {
+  const id = S.param; DC.alb = DC.alb || new Map();
+  if (!DC.alb.has(id)) { DC.alb.set(id, null); dz('album/' + id).then(a => { DC.alb.set(id, a); if (S.route === 'dz-album') render(); }); }
+  const a = DC.alb.get(id);
+  if (!a) return `${back()}<div class="pod-loading">Loading…</div>`;
+  const tracks = (a.tracks?.data || []).map(r => ({ ...dzTrack(r), album: a.title, art: a.cover_medium }));
+  return `${back()}<div class="pod-head"><img src="${esc(a.cover_big || '')}" alt=""><div><h1>${esc(a.title)}</h1><div class="muted">${esc(a.artist?.name || '')}${a.release_date ? ' · ' + a.release_date.slice(0, 4) : ''}</div></div></div>
+    <section class="section"><div class="dc-list">${tracks.map(dcRow).join('')}</div></section>`;
+};
