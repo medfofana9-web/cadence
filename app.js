@@ -205,7 +205,7 @@ async function boot() {
   matchMedia('(prefers-color-scheme: light)').addEventListener?.('change', applySettings);
   const [tracks, pls, arts, thumbs] = await Promise.all([db.all('tracks'), db.all('playlists'), db.all('art'), db.all('thumbs')]);
   for (const [id, t] of tracks) S.tracks.set(id, t);
-  for (const t of await kv.get('ext', [])) S.ext.set(t.id, t);
+  for (const t of await kv.get('ext', [])) { if (t.kind === 'episode') t.title = pods.tidy(t.title); S.ext.set(t.id, t); }
   S.pod = await kv.get('pod', { subs: [], prog: {}, saved: {} });
   S.quranSpot = await kv.get('quranSpot', null);
   S.quranSaved = await kv.get('quranSaved', []);
@@ -3259,14 +3259,15 @@ function replayData(year = new Date().getFullYear()) {
 }
 const peakText = h => h >= 21 || h < 4 ? 'late at night' : h < 12 ? 'in the morning' : h < 17 ? 'in the afternoon' : 'in the evening';
 const hrs = h => h >= 10 ? Math.round(h).toLocaleString() : h.toFixed(1);
+const hoursText = h => h < 1 ? `${Math.max(1, Math.round(h * 60))} minutes` : `${hrs(h)} hours`;
 VIEWS.replay = () => {
   const r = replayData();
   if (r.plays < 5) return `${back()}<div class="page-head"><h1>Replay ${r.year}</h1></div><div class="empty-state small"><h2>Keep listening</h2><p>Your Replay fills in as you play music this year. Only real listening counts.</p></div>`;
   const key = listKey(r.topSongs.map(x => x.t.id), `Replay ${r.year}`);
   const mMax = Math.max(...r.months, 1), nowM = new Date().getMonth();
   return `${back()}<div class="page-head"><div><h1>Replay ${r.year}</h1><div class="section-sub">Updated as you listen</div></div></div>
-    <button class="rp-story-btn" data-action="rp-story" style="${ambient(r.topSongs[0]?.t.colors)}"><img src="${artOf(r.topSongs[0]?.t, 'full')}" alt=""><span><b>Your ${r.year} story</b><em>${hrs(r.hours)} hours, your top song, artist and more</em></span>${icon('play')}</button>
-    <div class="rp-stats"><div class="stat"><span>Hours</span><b>${hrs(r.hours)}</b></div><div class="stat"><span>Songs</span><b>${r.songs.toLocaleString()}</b></div><div class="stat"><span>Artists</span><b>${r.artists.toLocaleString()}</b></div><div class="stat"><span>Top genre</span><b class="ellipsis">${esc(r.topGenre || '—')}</b></div></div>
+    <button class="rp-story-btn" data-action="rp-story" style="${ambient(r.topSongs[0]?.t.colors)}"><img src="${artOf(r.topSongs[0]?.t, 'full')}" alt=""><span><b>Your ${r.year} story</b><em>${hoursText(r.hours)}, your top song, artist and more</em></span>${icon('play')}</button>
+    <div class="rp-stats"><div class="stat"><span>${r.hours < 1 ? 'Minutes' : 'Hours'}</span><b>${r.hours < 1 ? Math.max(1, Math.round(r.hours * 60)) : hrs(r.hours)}</b></div><div class="stat"><span>Songs</span><b>${r.songs.toLocaleString()}</b></div><div class="stat"><span>Artists</span><b>${r.artists.toLocaleString()}</b></div><div class="stat"><span>Top genre</span><b class="ellipsis">${esc(r.topGenre || '—')}</b></div></div>
     <section class="section"><div class="section-head"><h2>Top Songs</h2><button class="btn small" data-play-list="${key}" data-i="0">${icon('play')}Play all</button></div>
       <div class="rp-list">${r.topSongs.slice(0, 10).map((x, i) => `<div class="rp-row" data-play-list="${key}" data-i="${i}"><span class="rp-rank">${i + 1}</span><img loading="lazy" src="${artOf(x.t)}" alt=""><span class="rp-main"><b class="ellipsis">${esc(x.t.title)}</b><em class="ellipsis">${esc(x.t.artist)} · ${x.n} play${x.n === 1 ? '' : 's'}</em></span></div>`).join('')}</div></section>
     <section class="section"><div class="section-head"><h2>Top Artists</h2></div><div class="shelf">${r.topArtists.map(a => collCard({ href: 'artist/' + a.name, title: a.name, sub: `${hrs(a.hours)} hours`, tracks: a.ts, round: true, img: artistImg(a.ts, a.name) })).join('')}</div></section>
@@ -3277,7 +3278,7 @@ function replayStory() {
   const r = replayData(); if (r.plays < 5) return;
   const top = r.topSongs[0]?.t, ta = r.topArtists[0];
   const cards = [
-    { c: '#2a1846', h: `<div class="rs-eyebrow">Replay ${r.year}</div><div class="rs-lead">This year you spent</div><div class="rs-big">${hrs(r.hours)}</div><div class="rs-lead">hours with your music.</div><p class="rs-sub">${r.hours >= 24 ? `That’s ${Math.round(r.hours / 24)} full days. ` : ''}Most of it ${peakText(r.peak)}.</p>` },
+    { c: '#2a1846', h: `<div class="rs-eyebrow">Replay ${r.year}</div><div class="rs-lead">This year you spent</div><div class="rs-big">${r.hours < 1 ? Math.max(1, Math.round(r.hours * 60)) : hrs(r.hours)}</div><div class="rs-lead">${r.hours < 1 ? 'minutes' : 'hours'} with your music.</div><p class="rs-sub">${r.hours >= 24 ? `That’s ${Math.round(r.hours / 24)} full days. ` : ''}Most of it ${peakText(r.peak)}.</p>` },
     top && { c: top.colors?.base ? vivid(top.colors.base, .24, 1.4) : '#3b1f2b', h: `<div class="rs-eyebrow">Your top song</div><img class="rs-art" src="${artOf(top, 'full')}" alt=""><div class="rs-title">${esc(top.title)}</div><div class="rs-sub">${esc(top.artist)}</div><p class="rs-sub">Played ${r.topSongs[0].n} times</p>` },
     ta && { c: '#14304a', h: `<div class="rs-eyebrow">Your top artist</div><img class="rs-art round" src="${artistImg(ta.ts, ta.name)}" alt=""><div class="rs-title">${esc(ta.name)}</div><p class="rs-sub">${hrs(ta.hours)} hours together</p>` },
     { c: '#3a2410', h: `<div class="rs-eyebrow">On repeat</div>${r.topSongs.slice(0, 5).map((x, i) => `<div class="rs-row"><span>${i + 1}</span><img src="${artOf(x.t)}" alt=""><span><b>${esc(x.t.title)}</b><em>${esc(x.t.artist)}</em></span></div>`).join('')}` },
