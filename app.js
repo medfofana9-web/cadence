@@ -638,10 +638,10 @@ VIEWS.home = () => {
     <button class="btn flow-btn" data-action="flow"><svg><use href="#i-flow"/></svg>Fof Flow</button></div>
   <section class="hero ${cur ? 'live' : ''}" style="${richAmbient(hero.colors)}">
     <div class="hero-art" data-play-list="${heroKey}" data-i="0"><img src="${artOf(hero, 'full')}" alt=""></div>
-    <div class="hero-info"><div class="eyebrow">${cur ? 'Continue listening' : recent.length ? 'Last played' : 'Newest in your library'}</div>
+    <div class="hero-info"><div class="eyebrow">${cur ? '<span class="when-playing">Now playing</span><span class="when-paused">Paused · pick up where you left off</span>' : recent.length ? 'Last played' : 'Newest in your library'}</div>
       <h1 class="ellipsis">${cur ? '<span class="eq hero-eq"><i></i><i></i><i></i></span>' : ''}${esc(hero.title)}</h1><div class="sub ellipsis">${esc(hero.artist)}${hero.album ? ' · ' + esc(hero.album) : ''}</div>
       ${cur ? '<div class="hero-progress"><i id="hero-bar"></i></div>' : ''}
-      <div class="row-actions">${cur ? `<button class="btn primary" data-action="toggle"><svg><use href="#i-${engine.el.paused ? 'play' : 'pause'}"/></svg>${engine.el.paused ? (resumeAt ? `Resume at ${fmt(resumeAt)}` : 'Play') : 'Pause'}</button>` : `<button class="btn primary" data-play-list="${heroKey}" data-i="0"><svg><use href="#i-play"/></svg>Play</button>`}
+      <div class="row-actions">${cur ? `<button class="btn primary" data-action="toggle"><span class="when-playing"><svg><use href="#i-pause"/></svg>Pause</span><span class="when-paused"><svg><use href="#i-play"/></svg>${resumeAt ? `Resume at ${fmt(resumeAt)}` : 'Resume'}</span></button>` : `<button class="btn primary" data-play-list="${heroKey}" data-i="0"><svg><use href="#i-play"/></svg>Play</button>`}
       <button class="btn ghost" data-action="radio" data-id="${hero.id}"><svg><use href="#i-radio"/></svg>Song radio</button></div></div>
   </section>
   ${(() => { const n = reviewList().length; return n ? `<a class="check-banner" href="#/review"><div class="cb-stack">${reviewList().slice(0, 3).map(t => `<img src="${artOf(t)}" alt="">`).join('')}</div><div><b>${count(n)} to check</b><span>Quick look at names Fof Music wasn’t sure about</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''; })()}

@@ -884,3 +884,10 @@ html[data-theme=light],[data-theme=light] body,[data-theme=light] #backdrop{back
   .now-controls .icon-btn.big svg{width:38px;height:38px}
   .now-art{border-radius:18px}
 }
+/* paused means paused: no moving bars, no "now playing" */
+.when-paused{display:none}
+.is-paused .when-paused{display:inline}.is-paused .when-playing{display:none}
+.is-paused .hero-eq{display:none}
+.is-paused .eq i{animation-play-state:paused}
+.btn .when-playing,.is-paused .btn .when-paused{display:inline-flex;align-items:center;gap:8px}
+.is-paused .btn .when-playing,.btn .when-paused{display:none}
