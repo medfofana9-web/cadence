@@ -378,6 +378,7 @@ function render() {
 }
 function afterRender() {
   if (S.route === 'search') { const i = $('#search-input'); if (i && document.activeElement !== i && !('ontouchstart' in window)) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
+  if (S.route === 'search') refreshDiscover();
   if (S.route === 'import') bindImport();
   requestAnimationFrame(() => $$('.shelf').forEach(sh => sh.closest('.section')?.classList.toggle('fits', sh.scrollWidth <= sh.clientWidth + 4)));
   renderBadge();
@@ -740,22 +741,100 @@ function ctxTile(c) {
   return tile({ href: h, title, tracks, img });
 }
 
+
+const discoverCache = new Map();
+let discoverTimer, discoverVersion = 0;
+function catalogLookup(query) {
+  return new Promise((resolve, reject) => {
+    const callback = 'fofCatalog' + uid();
+    const script = document.createElement('script');
+    const finish = (error, data) => {
+      clearTimeout(timeout);
+      script.remove();
+      delete window[callback];
+      if (error) reject(error);
+      else resolve(data.results.filter(t => t.kind === 'song' && t.trackName && t.artistName));
+    };
+    const timeout = setTimeout(() => finish(Error('Catalog request timed out')), 8000);
+    window[callback] = data => data && Array.isArray(data.results)
+      ? finish(null, data)
+      : finish(Error('Invalid catalog response'));
+    script.onerror = () => finish(Error('Catalog unavailable'));
+    const params = new URLSearchParams({ term: query, country: 'US', media: 'music', entity: 'song', limit: '30', callback });
+    script.src = 'https://itunes.apple.com/search?' + params;
+    document.head.append(script);
+  });
+}
+function discoverRows(results) {
+  const key = (title, artist) => fold(title) + '\u0000' + fold(artist);
+  const library = new Set([...S.tracks.values()].flatMap(t => [
+    key(t.title, t.artist),
+    ...artistCredits(t.artist).map(a => key(t.title, a)),
+  ]));
+  const seen = new Set();
+  const rows = results.filter(t => {
+    if (S.settings.hideExplicit && t.trackExplicitness === 'explicit') return false;
+    const id = key(t.trackName, t.artistName);
+    if (library.has(id) || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  if (!rows.length) return '<p class="muted">No new songs found in the catalog.</p>';
+  return rows.slice(0, 15).map(t => {
+    const query = encodeURIComponent(t.artistName + ' ' + t.trackName + ' official audio');
+    const detail = [t.artistName, t.collectionName, t.trackTimeMillis ? fmt(t.trackTimeMillis / 1000) : ''].filter(Boolean);
+    return `<div class="toolbar" style="gap:12px;margin-bottom:12px">
+      <div style="min-width:0"><div class="ellipsis">${esc(t.trackName)}</div><div class="muted ellipsis">${esc(detail.join(' · '))}</div></div>
+      <a class="btn small" href="https://www.youtube.com/results?search_query=${query}" target="_blank" rel="noopener noreferrer">Find official audio</a>
+    </div>`;
+  }).join('');
+}
+function refreshDiscover() {
+  clearTimeout(discoverTimer);
+  const version = ++discoverVersion;
+  const box = $('#discover-results');
+  const query = S.param.trim();
+  if (!box || query.length < 2) return;
+  const key = query.toLowerCase();
+  if (discoverCache.has(key)) {
+    box.innerHTML = discoverRows(discoverCache.get(key));
+    return;
+  }
+  box.textContent = 'Searching the music catalog…';
+  discoverTimer = setTimeout(async () => {
+    const stillCurrent = () => version === discoverVersion && box.isConnected;
+    try {
+      const results = await catalogLookup(query);
+      if (discoverCache.size >= 40) discoverCache.delete(discoverCache.keys().next().value);
+      discoverCache.set(key, results);
+      if (stillCurrent()) box.innerHTML = discoverRows(results);
+    } catch {
+      if (stillCurrent()) box.innerHTML = '<p>Catalog search is unavailable. <button class="chip" data-action="discover-retry">Try again</button></p>';
+    }
+  }, 400);
+}
+
 VIEWS.search = () => {
   const q = S.param;
-  const input = `<div class="search-box"><svg><use href="#i-search"/></svg><input id="search-input" class="input" placeholder="Songs, artists, albums, playlists, genres" value="${esc(q)}" autocomplete="off" spellcheck="false" enterkeyhint="search">${q ? '<button class="icon-btn small clear-q" data-action="clear-q" aria-label="Clear"><svg><use href="#i-x"/></svg></button>' : ''}</div>`;
+  const input = `<div class="search-box"><svg><use href="#i-search"/></svg><input id="search-input" class="input" aria-label="Search music" placeholder="Search your library and discover music" value="${esc(q)}" autocomplete="off" spellcheck="false" enterkeyhint="search">${q ? '<button class="icon-btn small clear-q" data-action="clear-q" aria-label="Clear"><svg><use href="#i-x"/></svg></button>' : ''}</div>`;
   if (!q) {
     const gs = [...groups('mix')].sort((a, b) => b[1].length - a[1].length);
     return `<div class="page-head"><h1>Search</h1></div>${input}
       ${S.searches.length ? `<section class="section"><div class="section-head"><h2>Recent searches</h2><a class="see-all" data-action="clear-searches">Clear</a></div><div class="chips">${S.searches.map(s => `<button class="chip" data-search="${esc(s)}">${esc(s)}</button>`).join('')}</div></section>` : ''}
       ${gs.length ? `<section class="section"><div class="section-head"><h2>Browse your library</h2></div><div class="genre-grid">${gs.map(([k, ts]) => { const c = colorsOf(ts); return `<div class="genre" data-href="mix/${esc(k)}" style="${ambient(c)}"><span>${esc(k)}</span><small>${count(mixTracks(k).length)}</small><img loading="lazy" src="${artOf(ts.find(t => S.thumbs.has(t.id)) || ts[0])}" alt=""></div>`; }).join('')}</div></section>` : ''}`;
   }
-  const res = S.index.search(q, 300);
+  const filter = S.searchView || 'all';
+  const tabs = `<div class="chips" aria-label="Search filters">${[['all', 'All'], ['library', 'In Library'], ['discover', 'Discover']].map(([key, label]) => `<button class="chip ${key === filter ? 'on' : ''}" aria-pressed="${key === filter}" data-action="search-view" data-view="${key}">${label}</button>`).join('')}</div>`;
+  const page = `<div class="page-head"><h1>Search</h1></div>${input}${tabs}`;
+  const discover = filter === 'library' ? '' : `<section class="section"><div class="section-head"><div><h2>Discover</h2><div class="section-sub">iTunes catalog</div></div></div><div id="discover-results" class="muted" aria-live="polite">${q.trim().length < 2 ? 'Enter at least two characters to search the catalog.' : ''}</div></section>`;
+  if (filter === 'discover') return page + discover;
+  const res = S.index.search(q, 300).filter(r => r.kind !== 'song' || !(S.settings.hideExplicit && S.tracks.get(r.key)?.explicit));
   const songs = res.filter(r => r.kind === 'song').map(r => S.tracks.get(r.key)).filter(Boolean).filter(t => !(S.settings.hideExplicit && t.explicit));
   const artists = res.filter(r => r.kind === 'artist').slice(0, 12);
   const albums = res.filter(r => r.kind === 'album').slice(0, 12);
   const pls = res.filter(r => r.kind === 'playlist').slice(0, 8);
   const genres = res.filter(r => r.kind === 'genre').slice(0, 8);
-  if (!res.length) return `<div class="page-head"><h1>Search</h1></div>${input}<div class="empty-state small"><h2>No results for “${esc(q)}”</h2><p>Check the spelling, or try an artist, album or genre.</p></div>`;
+  if (!res.length) return `${page}<section class="section"><div class="section-head"><h2>In Library</h2></div><p class="muted">No library matches for “${esc(q)}”.</p></section>${discover}`;
   const top = res[0];
   const songKey = listKey(songs.map(t => t.id), 'Search');
   let topHtml = '';
@@ -763,14 +842,14 @@ VIEWS.search = () => {
   else { const ts = top.kind === 'artist' ? groups('creditedArtist').get(top.key) : top.kind === 'album' ? groups('album').get(top.key) : top.kind === 'genre' ? mixTracks(top.key) : S.playlists.get(top.key)?.tracks.map(id => S.tracks.get(id)).filter(Boolean);
     const href = top.kind === 'playlist' ? 'playlist/' + top.key : top.kind === 'genre' ? 'mix/' + top.key : top.kind + '/' + top.key;
     topHtml = `<div class="top-result sr-item" data-href="${esc(href)}" style="${ambient(colorsOf(ts || []))}"><div class="${top.kind === 'artist' ? 'round' : ''} tr-art">${collageHtml(ts || [])}</div><div><div class="eyebrow">${{ artist: 'Artist', album: 'Album', playlist: 'Playlist', genre: 'Genre' }[top.kind]}</div><h2 class="ellipsis">${esc(top.primary)}</h2><div class="muted">${count((ts || []).length)}</div></div></div>`; }
-  return `<div class="page-head"><h1>Search</h1></div>${input}
+  return `${page}<div class="section-head" style="margin-top:24px"><h2>In Library</h2></div>
     <div class="search-top"><section><div class="section-head"><h2>Top result</h2></div>${topHtml}</section>
     ${songs.length ? `<section><div class="section-head"><h2>Songs</h2></div>${trackRows(songs.slice(0, 5), { key: songKey, context: 'Search', header: false, cols: [] })}</section>` : ''}</div>
     ${artists.length ? shelf('Artists', artists.map(r => { const ts = groups('creditedArtist').get(r.key) || []; return collCard({ href: 'artist/' + r.key, title: r.key, sub: count(ts.length), tracks: ts, round: true, img: artOf(ts[0]) }); }).join('')) : ''}
     ${albums.length ? shelf('Albums', albums.map(r => { const ts = groups('album').get(r.key) || []; const [al, ar] = r.key.split('\u0001'); return collCard({ href: 'album/' + r.key, title: al, sub: ar, tracks: ts }); }).join('')) : ''}
     ${pls.length ? shelf('Playlists', pls.map(r => { const p = S.playlists.get(r.key); return p ? collCard({ href: 'playlist/' + p.id, title: p.name, sub: count(p.tracks.length), tracks: p.tracks.map(id => S.tracks.get(id)).filter(Boolean), img: S.plCovers.get(p.id) }) : ''; }).join('')) : ''}
     ${genres.length ? `<section class="section"><div class="section-head"><h2>Genres</h2></div><div class="chips">${genres.map(r => `<button class="chip" data-href="mix/${esc(r.key)}">${esc(r.key)}</button>`).join('')}</div></section>` : ''}
-    ${songs.length > 5 ? `<section class="section"><div class="section-head"><h2>All songs</h2><span class="muted">${songs.length}</span></div>${trackRows(songs, { context: 'Search', cols: ['album'] })}</section>` : ''}`;
+    ${songs.length > 5 ? `<section class="section"><div class="section-head"><h2>All songs</h2><span class="muted">${songs.length}</span></div>${trackRows(songs, { context: 'Search', cols: ['album'] })}</section>` : ''}${discover}`;
 };
 function rebuildIndex() {
   const e = [];
@@ -2320,6 +2399,8 @@ document.addEventListener('click', async e => {
       case 'set': S.settings[a.dataset.key] = a.dataset.val; S.settingsAt = Date.now(); kv.set('settingsAt', S.settingsAt); await saveSettings(); return render();
       case 'back': return history.length > 1 ? history.back() : go('home');
       case 'clear-searches': S.searches = []; kv.set('searches', []); return render();
+      case 'search-view': S.searchView = a.dataset.view; render(); $('[data-action="search-view"][aria-pressed="true"]')?.focus(); return;
+      case 'discover-retry': refreshDiscover(); return;
       case 'clear-q': go('search'); return;
       case 'apply-update': return applyUpdate();
       case 'check-update': { await checkVersion(); if (!$('#update-bar').classList.contains('show')) toast('You’re on the newest version'); return; }
@@ -2394,6 +2475,7 @@ document.addEventListener('input', e => {
     clearTimeout(searchT);
     const q = e.target.value;
     searchT = setTimeout(() => {
+      if (S.route !== 'search' || !e.target.isConnected) return;
       history.replaceState(null, '', '#/search' + (q ? '/' + encodeURIComponent(q) : ''));
       S.param = q; const pos = e.target.selectionStart; render();
       const i = $('#search-input'); if (i) { i.focus(); i.setSelectionRange(pos, pos); }
