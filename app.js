@@ -190,7 +190,7 @@ function queueStatePush() {
   clearTimeout(pushT);
   pushT = setTimeout(() => {
     const { volume, ...settings } = S.settings;
-    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes, pod: { subs: S.pod.subs, prog: S.pod.prog }, eps: Object.keys(S.pod.prog).slice(-150).map(id => S.ext.get(id)).filter(Boolean).map(({ path, local, ...e }) => e), quran: S.quranSpot || null, quranSaved: S.quranSaved || [] }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
+    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes, pod: { subs: S.pod.subs, prog: S.pod.prog }, eps: Object.keys(S.pod.prog).slice(-150).map(id => S.ext.get(id)).filter(Boolean).map(({ path, local, ...e }) => e), quran: S.quranSpot || null, quranSaved: S.quranSaved || [], want: (S.want || []).slice(0, 400) }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
   }, 4000);
 }
 
@@ -209,6 +209,7 @@ async function boot() {
   S.pod = await kv.get('pod', { subs: [], prog: {}, saved: {} });
   S.quranSpot = await kv.get('quranSpot', null);
   S.quranSaved = await kv.get('quranSaved', []);
+  S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
   for (const [id, p] of pls) S.playlists.set(id, p);
   for (const [id, b] of arts) (id.startsWith('pl:') ? S.plCovers : S.art).set(id.replace(/^pl:/, ''), URL.createObjectURL(b));
   for (const [id, b] of thumbs) S.thumbs.set(id, URL.createObjectURL(b));
@@ -246,6 +247,7 @@ async function boot() {
   window.addEventListener('online', () => { if (S.user) { syncDown(); setTimeout(autoUpload, 5000); } });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (IN_APP) { renewReminder(); siriHooks(); }
+  setTimeout(() => { try { checkWants(); } catch {} }, 6000);
 }
 /** "Hey Siri, play Fof Flow" and the home screen widget hand their request to the app here. */
 function siriRun(a) {
@@ -254,6 +256,7 @@ function siriRun(a) {
   else if (a === 'quran') S.quranSpot ? qResume() : go('quran');
   else if (a === 'toggle') toggle();
   else if (a === 'next') next();
+  else if (a?.startsWith('want/')) wantFromText(a.slice(5));
 }
 async function siriHooks() {
   const nat = window.Capacitor?.Plugins?.FofNative; if (!nat) return;
@@ -342,6 +345,7 @@ function mergeState(d) {
     S.pod = { ...S.pod, subs, prog }; kv.set('pod', S.pod);
   }
   for (const e of d.eps || []) if (!S.ext.has(e.id)) S.ext.set(e.id, e);
+  if (d.want) { const m = new Map((S.want || []).map(w => [w.key + (w.arrived ? '+' : ''), w])); for (const w of d.want) { const k = w.key + (w.arrived ? '+' : ''); if (!m.has(k) && !(w.arrived ? false : (S.want || []).some(x => x.key === w.key && x.arrived))) m.set(k, w); } S.want = [...m.values()].sort((a, b) => b.at - a.at); kv.set('want', S.want); }
   if (d.quranSaved) { const m = new Map((S.quranSaved || []).map(x => [x.s + ':' + x.v, x])); for (const x of d.quranSaved) if (!m.has(x.s + ':' + x.v)) m.set(x.s + ':' + x.v, x); S.quranSaved = [...m.values()]; kv.set('quranSaved', S.quranSaved); }
   if (d.quran && (d.quran.at || 0) > (S.quranSpot?.at || 0)) { S.quranSpot = d.quran; kv.set('quranSpot', S.quranSpot); }
   kv.set('log', S.log); kv.set('history', S.history); kv.set('ctxs', S.ctxs); kv.set('dupIgnore', S.dupIgnore);
@@ -790,6 +794,7 @@ VIEWS.home = () => {
       <div class="row-actions">${cur ? `<button class="btn primary" data-action="toggle"><span class="when-playing"><svg><use href="#i-pause"/></svg>Pause</span><span class="when-paused"><svg><use href="#i-play"/></svg>${resumeAt ? `Resume at ${fmt(resumeAt)}` : 'Resume'}</span></button>` : `<button class="btn primary" data-play-list="${heroKey}" data-i="0"><svg><use href="#i-play"/></svg>Play</button>`}
       ${hero.kind === 'ayah' || hero.kind === 'surahrec' ? `<a class="btn ghost" href="#/quran/${hero.surah}"><svg><use href="#i-quran"/></svg>Open reader</a>` : hero.kind === 'episode' ? `<a class="btn ghost" href="#/show/${hero.showId}"><svg><use href="#i-podcast"/></svg>Show</a>` : `<button class="btn ghost" data-action="radio" data-id="${hero.id}"><svg><use href="#i-radio"/></svg>Song radio</button>`}</div></div>
   </section>
+  ${S.wantNew ? (() => { const got = wants().filter(w => w.arrived).sort((a, b) => b.arrived - a.arrived).slice(0, S.wantNew); return `<a class="check-banner want-banner" href="#/import/want"><div class="cb-stack">${got.slice(0, 3).map(w => `<img src="${esc(w.art)}" alt="">`).join('')}</div><div><b>${count(S.wantNew)} from your Want list ${S.wantNew === 1 ? 'is' : 'are'} here</b><span>${esc(got.slice(0, 2).map(w => w.title).join(', '))}${S.wantNew > 2 ? ' and more' : ''}</span></div><svg class="chev"><use href="#i-back"/></svg></a>`; })() : ''}
   ${(() => { const n = reviewList().length; return n ? `<a class="check-banner" href="#/review"><div class="cb-stack">${reviewList().slice(0, 3).map(t => `<img src="${artOf(t)}" alt="">`).join('')}</div><div><b>${count(n)} to check</b><span>Quick look at names Fof Music wasn’t sure about</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''; })()}
   ${ctxTiles.length ? `<section class="section"><div class="section-head"><h2>Jump back in</h2></div><div class="tiles">${ctxTiles.join('')}</div></section>` : ''}
   ${dailies.length ? shelf('Daily Mixes', dailies.map(mixCard).join('')) : ''}
@@ -1214,6 +1219,7 @@ VIEWS.duplicates = () => {
    ===================================================================== */
 const IMP = { jobs: [], cancel: false, running: false, found: 0, added: 0, skipped: 0, failed: 0, maybeDup: 0 };
 VIEWS.import = () => {
+  if (S.param === 'want') return wantView();
   if (S.param !== 'files' && !IMP.jobs.length) return discoverView();
   const signedOut = cloud.cloudConfigured() && !S.user;
   const st = IMP;
@@ -1288,7 +1294,7 @@ async function importFiles(files, { retry = false, background = false } = {}) {
   }));
   for (const j of queue) { j.state = 'skip'; j.status = 'Cancelled'; }
   IMP.running = false; S.indexDirty = true; S.ver++;
-  setTimeout(() => { fillGenres(); rematchPlaylists(); }, 1000);
+  setTimeout(() => { fillGenres(); rematchPlaylists(); DC.owned = null; checkWants(); }, 1000);
   if (S.route === 'import') render();
   const msg = IMP.cancel && queue.length ? `Stopped. Added ${count(IMP.added)}` : IMP.added ? `Added ${count(IMP.added)}${IMP.skipped ? ` · ${IMP.skipped} already here` : ''}` : IMP.skipped ? 'Those songs are already in your library' : 'Nothing was added';
   const toCheck = reviewList().length;
@@ -2592,6 +2598,14 @@ document.addEventListener('click', async e => {
       case 'noop': return;
       case 'pod-play': return podPlay(id);
       case 'artist-more': e.preventDefault(); return artistSheet();
+      case 'want': { e.stopPropagation(); try { return toggleWant(JSON.parse(a.dataset.w)); } catch { return; } }
+      case 'want-x': { e.stopPropagation(); S.want = wants().filter(w => w.key !== a.dataset.key || w.arrived); saveWant(); updateAddTabs(); return render(); }
+      case 'get': e.stopPropagation(); return getSheet(a.dataset.key);
+      case 'get-all': return getSheet(null, { all: true });
+      case 'get-next': { const open = wants().filter(w => !w.arrived); const i = open.findIndex(w => w.key === a.dataset.key); const nx = open[i + 1]; return nx ? getSheet(nx.key, { all: true }) : closeSheet(); }
+      case 'get-go': return getGo(a.dataset.k, a.dataset.q);
+      case 'want-share': return navigator.share?.({ title: 'Songs I want', text: wants().filter(w => !w.arrived).map(w => `${w.artist} – ${w.title}`).join('\n') }).catch(() => {});
+      case 'shazam-help': return shazamHelp();
       case 'dz-preview': return dzPreview(a);
       case 'dc-type': DC.type = id; DC.results = null; render(); return dcSearch();
       case 'yt': { e.stopPropagation(); dzStop(false); const url = 'https://www.youtube.com/results?search_query=' + encodeURIComponent(a.dataset.q + ' official video'); if (IN_APP) location.href = url; else window.open(url, '_blank', 'noopener'); return; }
@@ -3378,7 +3392,7 @@ async function fillDiscover() {
     const have = new Set(visible().map(t => nrm(t.title)));
     const missing = top.filter(r => !have.has(nrm(r.title))).filter((r, i, a) => a.findIndex(x => nrm(x.title) === nrm(r.title)) === i).slice(0, 6);
     if (!missing.length) continue;
-    box.innerHTML = `<div class="am-sub">Not in your library yet</div><div class="am-list">${missing.map(r => `<div class="am-row am-dz-row" data-action="dz-preview" data-url="${esc(r.preview)}" data-title="${esc(r.title)}"><span class="am-dz-art"><img loading="lazy" src="${esc(r.art)}" alt=""><span class="am-dz-btn">${icon(DZ.url === r.preview ? 'pause' : 'play')}</span></span><span class="am-main"><b class="ellipsis">${esc(r.title)}</b><em class="ellipsis">${esc(r.album)} · Preview</em></span><button class="am-yt" data-action="yt" data-q="${esc(name + ' ' + r.title)}" aria-label="Watch on YouTube"><svg viewBox="0 0 28 20"><rect width="28" height="20" rx="5.5" fill="#ff0033"/><path d="M11.2 6v8l7-4z" fill="#fff"/></svg></button></div>`).join('')}</div>`;
+    box.innerHTML = `<div class="am-sub">Not in your library yet</div><div class="am-list">${missing.map(r => `<div class="am-row am-dz-row" data-action="dz-preview" data-url="${esc(r.preview)}" data-title="${esc(r.title)}"><span class="am-dz-art"><img loading="lazy" src="${esc(r.art)}" alt=""><span class="am-dz-btn">${icon(DZ.url === r.preview ? 'pause' : 'play')}</span></span><span class="am-main"><b class="ellipsis">${esc(r.title)}</b><em class="ellipsis">${esc(r.album)} · Preview</em></span>${wantBtn({ ...r, artist: name })}<button class="am-yt" data-action="yt" data-q="${esc(name + ' ' + r.title)}" aria-label="Watch on YouTube"><svg viewBox="0 0 28 20"><rect width="28" height="20" rx="5.5" fill="#ff0033"/><path d="M11.2 6v8l7-4z" fill="#fff"/></svg></button></div>`).join('')}</div>`;
   }
 }
 const DZ = { el: null, url: '', resume: false };
@@ -3406,7 +3420,7 @@ for (const el of engine.els) el.addEventListener('play', () => { if (DZ.el) dzSt
    Discover (Add Music): suggestions from your library, and search any song
    ===================================================================== */
 const DC = { q: '', type: 'track', results: null, sugg: null, loading: false, n: 0 };
-const addTabs = on => `<div class="seg q-seg add-tabs"><a class="${on === 'discover' ? 'on' : ''}" href="#/import">Discover</a><a class="${on === 'files' ? 'on' : ''}" href="#/import/files">Add files</a></div>`;
+const addTabs = on => `<div class="seg q-seg add-tabs"><a class="${on === 'discover' ? 'on' : ''}" href="#/import">Discover</a><a class="${on === 'want' ? 'on' : ''}" href="#/import/want">${wantTabLabel()}</a><a class="${on === 'files' ? 'on' : ''}" href="#/import/files">Add files</a></div>`;
 function ownedKeys() {
   if (DC.owned && DC.ownedAt === S.tracks.size) return DC.owned;
   const m = new Set();
@@ -3421,11 +3435,11 @@ function dcRow(r) {
   return `<div class="dc-row${have ? '' : ' am-dz-row'}" ${have || !r.preview ? '' : `data-action="dz-preview" data-url="${esc(r.preview)}"`}>
     <span class="am-dz-art dc-art"><img loading="lazy" src="${esc(r.art)}" alt="">${have || !r.preview ? '' : `<span class="am-dz-btn">${icon(DZ.url === r.preview ? 'pause' : 'play')}</span>`}</span>
     <span class="dc-main"><b class="ellipsis">${esc(r.title)}</b><em class="ellipsis">${esc(r.artist)}${r.album ? ' · ' + esc(r.album) : ''}</em></span>
-    ${have ? '<span class="dc-have">In library</span>' : `<button class="am-yt" data-action="yt" data-q="${esc(r.artist + ' ' + r.title)}" aria-label="Watch on YouTube"><svg viewBox="0 0 28 20"><rect width="28" height="20" rx="5.5" fill="#ff0033"/><path d="M11.2 6v8l7-4z" fill="#fff"/></svg></button>`}</div>`;
+    ${have ? '<span class="dc-have">In library</span>' : `${wantBtn(r)}<button class="am-yt" data-action="yt" data-q="${esc(r.artist + ' ' + r.title)}" aria-label="Watch on YouTube"><svg viewBox="0 0 28 20"><rect width="28" height="20" rx="5.5" fill="#ff0033"/><path d="M11.2 6v8l7-4z" fill="#fff"/></svg></button>`}</div>`;
 }
 function dcCard(r) {
   return `<div class="dc-card am-dz-row" data-action="dz-preview" data-url="${esc(r.preview)}"><span class="am-dz-art dc-cover"><img loading="lazy" src="${esc(r.art).replace('/250x250-', '/500x500-')}" alt=""><span class="am-dz-btn">${icon(DZ.url === r.preview ? 'pause' : 'play')}</span></span>
-    <div class="dc-card-t"><span class="dc-main"><b class="ellipsis">${esc(r.title)}</b><em class="ellipsis">${esc(r.artist)}</em></span><button class="am-yt" data-action="yt" data-q="${esc(r.artist + ' ' + r.title)}" aria-label="Watch on YouTube"><svg viewBox="0 0 28 20"><rect width="28" height="20" rx="5.5" fill="#ff0033"/><path d="M11.2 6v8l7-4z" fill="#fff"/></svg></button></div></div>`;
+    <div class="dc-card-t"><span class="dc-main"><b class="ellipsis">${esc(r.title)}</b><em class="ellipsis">${esc(r.artist)}</em></span>${wantBtn(r)}<button class="am-yt" data-action="yt" data-q="${esc(r.artist + ' ' + r.title)}" aria-label="Watch on YouTube"><svg viewBox="0 0 28 20"><rect width="28" height="20" rx="5.5" fill="#ff0033"/><path d="M11.2 6v8l7-4z" fill="#fff"/></svg></button></div></div>`;
 }
 async function dzArtistId(name) {
   DC.aid = DC.aid || new Map(); if (DC.aid.has(name)) return DC.aid.get(name);
@@ -3461,8 +3475,10 @@ function discoverView() {
   if (!DC.sugg && !DC.cacheTried) { DC.cacheTried = true; kv.get('discover', null).then(c => { if (c && Date.now() - c.at < 12 * 36e5 && !DC.sugg) { DC.sugg = c.v; if (S.route === 'import' && !DC.q) render(); } }); }
   if (!DC.fresh && !DC.loading && navigator.onLine) { DC.loading = true; loadSuggestions().then(x => { DC.sugg = x; DC.fresh = true; kv.set('discover', { at: Date.now(), v: x }); }).catch(e => { console.warn('discover', e); DC.sugg = { because: [], loved: [], genre: null }; }).finally(() => { DC.loading = false; if (S.route === 'import' && !DC.q) render(); }); }
   const sg = DC.sugg;
+  if (!DC.rel && !DC.relLoading && navigator.onLine) { DC.relLoading = true; kv.get('releases', null).then(c => { if (c && !DC.rel) { DC.rel = c.v; if (S.route === 'import' && !S.param && !DC.q) render(); } }); newReleases().then(x => { DC.rel = x; kv.set('releases', { at: Date.now(), v: x }); if (S.route === 'import' && !S.param && !DC.q) render(); }).catch(() => {}); }
+  const relShelf = DC.rel?.length ? `<section class="section"><div class="section-head"><h2>New from your artists</h2></div><div class="shelf dc-shelf">${DC.rel.map(releaseCard).join('')}</div></section>` : '';
   const body = DC.q ? dcResults() : !sg ? `<div class="pod-loading">${navigator.onLine ? 'Finding songs for you…' : 'Connect to the internet to discover songs.'}</div>` : `
-    ${sg.because.map(b => `<section class="section"><div class="section-head"><h2>Because you play ${esc(b.name)}</h2></div><div class="shelf dc-shelf">${b.items.map(dcCard).join('')}</div></section>`).join('')}
+    ${relShelf}${sg.because.map(b => `<section class="section"><div class="section-head"><h2>Because you play ${esc(b.name)}</h2></div><div class="shelf dc-shelf">${b.items.map(dcCard).join('')}</div></section>`).join('')}
     ${sg.loved.length ? `<section class="section"><div class="section-head"><h2>More from artists you love</h2></div><div class="dc-list">${sg.loved.slice(0, 12).map(dcRow).join('')}</div></section>` : ''}
     ${sg.genre ? `<section class="section"><div class="section-head"><h2>Popular in ${esc(sg.genre.name)}</h2></div><div class="shelf dc-shelf">${sg.genre.items.map(dcCard).join('')}</div></section>` : ''}
     ${!sg.because.length && !sg.loved.length && !sg.genre ? '<p class="muted pod-none">Play a few songs and suggestions will show up here.</p>' : ''}`;
@@ -3513,3 +3529,119 @@ VIEWS['dz-album'] = () => {
   return `${back()}<div class="pod-head"><img src="${esc(a.cover_big || '')}" alt=""><div><h1>${esc(a.title)}</h1><div class="muted">${esc(a.artist?.name || '')}${a.release_date ? ' · ' + a.release_date.slice(0, 4) : ''}</div></div></div>
     <section class="section"><div class="dc-list">${tracks.map(dcRow).join('')}</div></section>`;
 };
+
+/* =====================================================================
+   Want list: songs you don't have yet, one tap to get them, and they check
+   themselves off when the file arrives
+   ===================================================================== */
+const wantKey = (title, artist) => nrm(title) + '|' + nrm(artist);
+const wants = () => S.want || (S.want = []);
+const isWanted = (title, artist) => wants().some(w => !w.arrived && w.key === wantKey(title, artist));
+function saveWant() { kv.set('want', S.want); queueStatePush(); }
+function wantBtn(r) {
+  const on = isWanted(r.title, r.artist);
+  return `<button class="want-btn${on ? ' on' : ''}" data-action="want" data-w="${esc(JSON.stringify({ title: r.title, artist: r.artist, album: r.album || '', art: r.art || '', preview: r.preview || '' }))}" aria-label="${on ? 'Remove from Want list' : 'Add to Want list'}">${icon(on ? 'check' : 'plus')}</button>`;
+}
+function toggleWant(r) {
+  const k = wantKey(r.title, r.artist), w = wants(), i = w.findIndex(x => x.key === k && !x.arrived);
+  if (i >= 0) { w.splice(i, 1); toast('Removed from Want list'); }
+  else { w.unshift({ ...r, key: k, at: Date.now() }); toast('Added to Want list'); haptic(); }
+  saveWant();
+  $$(`.want-btn[data-w]`).forEach(b => { try { const x = JSON.parse(b.dataset.w); const on = isWanted(x.title, x.artist); b.classList.toggle('on', on); b.innerHTML = icon(on ? 'check' : 'plus'); } catch {} });
+  if (S.route === 'import' && S.param === 'want') render();
+  updateAddTabs();
+}
+/** When a wanted song shows up in the library, check it off. */
+function checkWants() {
+  let n = 0;
+  for (const w of wants()) if (!w.arrived && owns(w.title, w.artist)) { w.arrived = Date.now(); n++; }
+  if (n) { S.wantNew = (S.wantNew || 0) + n; kv.set('wantNew', S.wantNew); saveWant(); if (S.route === 'home' || (S.route === 'import' && S.param === 'want')) render(); toast(`${count(n)} from your Want list ${n === 1 ? 'is' : 'are'} here`); }
+}
+function updateAddTabs() { const t = document.querySelector('.add-tabs a[href="#/import/want"]'); if (t) t.textContent = wantTabLabel(); }
+const wantTabLabel = () => { const n = wants().filter(w => !w.arrived).length; return n ? `Want · ${n}` : 'Want'; };
+function wantView() {
+  const open = wants().filter(w => !w.arrived), got = wants().filter(w => w.arrived).sort((a, b) => b.arrived - a.arrived).slice(0, 30);
+  if (S.wantNew) { S.wantNew = 0; kv.set('wantNew', 0); }
+  const row = (w, done) => `<div class="dc-row${done || !w.preview ? '' : ' am-dz-row'}" ${done || !w.preview ? '' : `data-action="dz-preview" data-url="${esc(w.preview)}"`}>
+      <span class="am-dz-art dc-art"><img loading="lazy" src="${esc(w.art)}" alt="">${done || !w.preview ? '' : `<span class="am-dz-btn">${icon('play')}</span>`}</span>
+      <span class="dc-main"><b class="ellipsis">${esc(w.title)}</b><em class="ellipsis">${esc(w.artist)}${done ? '' : ' · ' + esc(wantAgo(w.at))}</em></span>
+      ${done ? '<span class="dc-have">In library</span>' : `<button class="btn small get-btn" data-action="get" data-key="${esc(w.key)}">Get</button><button class="icon-btn small want-x" data-action="want-x" data-key="${esc(w.key)}" aria-label="Remove">${icon('x')}</button>`}</div>`;
+  return `<div class="page-head"><div><h1>Add Music</h1></div></div>${addTabs('want')}
+    ${open.length ? `<div class="row-actions want-actions"><button class="btn primary" data-action="get-all">${icon('download')}Get all</button>${navigator.share ? `<button class="btn" data-action="want-share">${icon('share')}Share list</button>` : ''}</div>
+      <div class="dc-list">${open.map(w => row(w)).join('')}</div>`
+    : `<div class="empty-state small"><h2>Your Want list is empty</h2><p>Tap + next to any song you don’t have, in Discover, search or the player, to save it here.</p></div>`}
+    ${got.length ? `<section class="section"><div class="section-head"><h2>Arrived</h2></div><div class="dc-list">${got.map(w => row(w, true)).join('')}</div></section>` : ''}
+    ${waysCard()}`;
+}
+const wantAgo = t => { const d = (Date.now() - t) / 864e5; return d < 1 ? 'added today' : d < 2 ? 'added yesterday' : `added ${Math.floor(d)} days ago`; };
+
+/* ---------- Get: open the song where you can buy or download it ---------- */
+async function getSheet(key, { all = false } = {}) {
+  const open = wants().filter(w => !w.arrived);
+  const w = open.find(x => x.key === key) || (all ? open[0] : null); if (!w) return;
+  const q = `${w.artist} ${w.title}`;
+  const idx = open.indexOf(w);
+  const links = [
+    ['itunes', 'iTunes Store', 'Buy the song file', '#fa2d48', '♪'],
+    ['bandcamp', 'Bandcamp', 'If the artist sells there', '#1da0c3', 'b'],
+    ['amazon', 'Amazon Music', 'MP3 download', '#ff9900', 'a'],
+    ['youtube', 'YouTube', 'Watch the video', '#ff0033', '▶'],
+  ];
+  sheet(`<div class="get-sheet"><div class="get-head"><img src="${esc(w.art)}" alt=""><div><b>${esc(w.title)}</b><span>${esc(w.artist)}</span></div></div>
+    <div class="settings-group">${links.map(([k, l, sub, c, g]) => `<button class="set-row get-link" data-action="get-go" data-k="${k}" data-q="${esc(q)}"><span class="get-ic" style="background:${c}">${g}</span><span class="lbl"><b>${l}</b><span id="get-${k}">${sub}</span></span>${icon('back', 'chev')}</button>`).join('')}</div>
+    <p class="muted get-note">Songs you buy go into your Downloads or the Music app, and Fof Music adds them on its own.</p>
+    ${all && open.length > 1 ? `<div class="actions"><span class="muted">${idx + 1} of ${open.length}</span><button class="btn primary" data-action="get-next" data-key="${esc(w.key)}">Next song</button></div>` : ''}</div>`);
+  // price and direct store page from Apple's catalog
+  try {
+    const j = await new Promise(res => { const cb = '__it' + Math.random().toString(36).slice(2), s = document.createElement('script'); window[cb] = v => { delete window[cb]; s.remove(); res(v); }; s.onerror = () => res(null); s.src = `https://itunes.apple.com/search?media=music&entity=song&limit=5&term=${encodeURIComponent(q)}&callback=${cb}`; document.head.appendChild(s); setTimeout(() => res(null), 8000); });
+    const hit = (j?.results || []).find(r => nrm(r.trackName) === nrm(w.title)) || j?.results?.[0];
+    if (hit) { w.itunes = hit.trackViewUrl; const el = $('#get-itunes'); if (el) el.textContent = hit.trackPrice > 0 ? `Buy the song file · $${hit.trackPrice.toFixed(2)}` : 'Open in the iTunes Store'; }
+  } catch {}
+}
+function getGo(k, q) {
+  const w = wants().find(x => nrm(x.artist + ' ' + x.title) === nrm(q));
+  const e = encodeURIComponent(q);
+  const url = k === 'itunes' ? (w?.itunes ? w.itunes.replace('music.apple.com', 'itunes.apple.com') + (w.itunes.includes('?') ? '&' : '?') + 'app=itunes' : `https://www.apple.com/us/search/${e}?src=itunes_serp`)
+    : k === 'bandcamp' ? `https://bandcamp.com/search?q=${e}&item_type=t`
+    : k === 'amazon' ? `https://www.amazon.com/s?k=${e}&i=digital-music`
+    : `https://www.youtube.com/results?search_query=${encodeURIComponent(q + ' official video')}`;
+  if (IN_APP) location.href = url; else window.open(url, '_blank', 'noopener');
+}
+
+/* ---------- new releases from artists in your library ---------- */
+async function newReleases() {
+  const all = visible().filter(t => (t.category || 'Music') === 'Music');
+  const score = new Map(); for (const t of all) { const a = mainArtist(t.artist); if (/^unknown/i.test(a)) continue; score.set(a, (score.get(a) || 0) + (t.plays || 0) * 2 + (t.liked ? 6 : 0) + 1); }
+  const fav = [...score].sort((a, b) => b[1] - a[1]).map(x => x[0]).slice(0, 20);
+  const cutoff = Date.now() - 75 * 864e5;
+  const lists = await Promise.all(fav.map(async name => { const id = await dzArtistId(name); if (!id) return []; const j = await dz(`artist/${id}/albums?limit=8`); return (j?.data || []).filter(a => Date.parse(a.release_date) >= cutoff).map(a => ({ id: a.id, title: a.title, artist: name, date: a.release_date, art: a.cover_medium, type: a.record_type })); }));
+  const seen = new Set();
+  return lists.flat().filter(a => !seen.has(a.id) && seen.add(a.id)).sort((a, b) => Date.parse(b.date) - Date.parse(a.date)).slice(0, 16);
+}
+const relDate = d => { const t = Date.parse(d), days = (Date.now() - t) / 864e5; return days < 7 ? 'This week' : new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+function releaseCard(a) { return `<a class="dc-card" href="#/dz-album/${a.id}"><span class="dc-cover"><img loading="lazy" src="${esc(a.art).replace('/250x250-', '/500x500-')}" alt="">${(Date.now() - Date.parse(a.date)) / 864e5 < 14 ? '<span class="rel-new">NEW</span>' : ''}</span><div class="dc-card-t"><span class="dc-main"><b class="ellipsis">${esc(a.title)}</b><em class="ellipsis">${esc(a.artist)} · ${a.type === 'single' ? 'Single' : a.type === 'ep' ? 'EP' : 'Album'} · ${relDate(a.date)}</em></span></div></a>`; }
+
+/* ---------- ways in ---------- */
+function waysCard() {
+  return `<section class="section"><div class="section-head"><h2>Ways to add songs</h2></div><div class="settings-group ways">
+    <div class="set-row"><span class="get-ic" style="background:#34c759">${icon('check')}</span><div class="lbl"><b>Mac Downloads</b><span>Songs and zips you download on your Mac go in on their own.</span></div></div>
+    <div class="set-row"><span class="get-ic" style="background:#0a84ff">☁</span><div class="lbl"><b>From your iPhone</b><span>Save a song to Files › iCloud Drive › Fof Music Inbox. It shows up about a minute later.</span></div></div>
+    <div class="set-row"><span class="get-ic" style="background:#fa2d48">♪</span><div class="lbl"><b>iTunes Store purchases</b><span>Songs you buy are added from the Music app on your Mac.</span></div></div>
+    <button class="set-row" data-action="shazam-help"><span class="get-ic" style="background:#0088ff">S</span><div class="lbl"><b>Shazam to Want list</b><span>Hear a song you like, run the Shortcut, and it’s saved here.</span></div>${icon('back', 'chev')}</button>
+  </div></section>`;
+}
+function shazamHelp() {
+  sheet(`<h2>Shazam to Want list</h2><p class="muted">Set this up once on your iPhone. After that, say “Hey Siri, Want this song” while music is playing nearby.</p>
+    <ol class="steps"><li>Open the <b>Shortcuts</b> app and tap <b>+</b>.</li><li>Add the action <b>Shazam It</b> (search “Shazam”).</li><li>Add <b>Text</b> with the <b>Artist</b> variable, “ - ”, and the <b>Title</b> variable.</li><li>Add <b>URL Encode</b> on that Text, then another <b>Text</b>: <code>fofmusic://want/</code> followed by the encoded text.</li><li>Add <b>Open URLs</b> with that last Text.</li><li>Name it <b>Want this song</b>.</li></ol>
+    <div class="actions"><button class="btn primary" data-close>Done</button></div>`);
+}
+/** "fofmusic://want/Artist - Title" from the Shortcut. */
+async function wantFromText(text) {
+  const [artist, ...rest] = decodeURIComponent(text).split(' - '); const title = rest.join(' - ').trim();
+  if (!title) return;
+  let r = { title, artist: artist.trim(), album: '', art: '', preview: '' };
+  try { const j = await dz(`search?limit=5&q=${encodeURIComponent(`artist:"${r.artist}" track:"${title}"`)}`); const hit = j?.data?.[0]; if (hit) r = { ...dzTrack(hit), artist: hit.artist?.name || r.artist }; } catch {}
+  if (owns(r.title, r.artist)) return toast(`${r.title} is already in your library`);
+  if (!isWanted(r.title, r.artist)) toggleWant(r);
+  go('import/want');
+}

@@ -18,6 +18,11 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// fofmusic://flow, fofmusic://toggle … from the home screen widget.
     private func handle(_ url: URL) {
         guard url.scheme == "fofmusic", let a = url.host, !a.isEmpty else { return }
+        if a == "want" { // fofmusic://want/Artist - Title, from the Shazam Shortcut
+            let rest = url.absoluteString.components(separatedBy: "://want/").dropFirst().joined()
+            FofSiri.run("want/" + rest)
+            return
+        }
         FofSiri.run(a)
     }
 
