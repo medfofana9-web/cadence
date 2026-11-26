@@ -891,3 +891,53 @@ html[data-theme=light],[data-theme=light] body,[data-theme=light] #backdrop{back
 .is-paused .eq i{animation-play-state:paused}
 .btn .when-playing,.is-paused .btn .when-paused{display:inline-flex;align-items:center;gap:8px}
 .is-paused .btn .when-playing,.btn .when-paused{display:none}
+
+/* =====================================================================
+   iPhone player: Apple Music layout (big cover, title with glass buttons,
+   thin bar, plain solid controls, lyrics / AirPlay / queue icons) and a
+   lyrics view with the song on glass above and the controls on glass below
+   ===================================================================== */
+.now-icons,.now-mini,.glass-dot{display:none}
+.q-mode{width:32px;height:32px;border-radius:50%;display:inline-grid;place-items:center;color:rgba(255,255,255,.7);background:rgba(255,255,255,.08);margin-right:6px}
+.q-mode svg{width:16px;height:16px}
+.q-mode.on{color:#fff;background:rgba(255,255,255,.24)}
+@media (max-width:820px){
+  .now-head-r,.now-from{visibility:hidden}
+  .now-meta{gap:8px}
+  .now-meta>div{flex:1}
+  #now-title{font-size:21px;font-weight:650;letter-spacing:-.015em}
+  #now-artist{font-size:17px;color:rgba(255,255,255,.62)}
+  .now .like-btn.big,.glass-dot{display:grid;place-items:center;width:32px;height:32px;padding:0;border-radius:50%;flex:none;
+    background:rgba(255,255,255,.16);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);color:#fff}
+  .now .like-btn.big svg,.glass-dot svg{width:16px;height:16px}
+  .now .like-btn.on{color:#fff;background:rgba(255,255,255,.32)}
+  .now-progress input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px}
+  .now-progress input[type=range]::-webkit-slider-thumb{opacity:0}
+  .now-progress input[type=range]:active::-webkit-slider-runnable-track{height:10px;border-radius:5px}
+  .now-times{font-size:11px;font-weight:600;color:rgba(255,255,255,.5)}
+  .now-controls{grid-template-columns:1fr auto auto auto 1fr}
+  #now-shuffle,#now-repeat{visibility:hidden}
+  .now-controls .icon-btn.big{width:72px;height:56px;border-radius:16px}
+  .now-controls .icon-btn.big svg{width:38px;height:34px}
+  .now-controls .play-btn.huge{width:84px;height:72px;border-radius:18px}
+  .now-controls .play-btn.huge svg{width:44px;height:44px}
+  .now-tools{display:none}
+  .now-icons{display:flex;justify-content:space-around;align-items:center;margin-top:clamp(4px,1.4dvh,14px)}
+  .now-icons .icon-btn{width:48px;height:44px;color:rgba(255,255,255,.62);border-radius:12px}
+  .now-icons .icon-btn svg{width:22px;height:22px}
+  .now.panel-open #ic-lyrics.on-panel,.now.panel-open #ic-queue.on-panel{color:#fff;background:rgba(255,255,255,.16)}
+
+  /* lyrics / up next: song on glass at the top, controls on glass at the bottom */
+  .now.panel-open .now-art,.now.panel-open .now-meta{visibility:hidden}
+  .now.panel-open .now-right{padding:0 16px;bottom:calc(196px + var(--safe-b))}
+  .now.panel-open .now-mini{display:flex;align-items:center;gap:10px;padding:8px;margin:2px 0 6px;border-radius:16px;
+    background:rgba(255,255,255,.12);border:.5px solid rgba(255,255,255,.2);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
+  .now-mini img{width:44px;height:44px;border-radius:9px;object-fit:cover;flex:none}
+  .now-mini>div{min-width:0;display:flex;flex-direction:column}
+  .now-mini b{font-size:15px}.now-mini span{font-size:13px;color:rgba(255,255,255,.6)}
+  .now.panel-open .now-dock{padding:12px 14px 4px;border-radius:26px;background:rgba(255,255,255,.12);border:.5px solid rgba(255,255,255,.22);
+    backdrop-filter:blur(30px) saturate(1.5);-webkit-backdrop-filter:blur(30px) saturate(1.5)}
+  .now.panel-open .now-dock .now-progress{margin-top:0}
+  .now.panel-open .now-dock .now-controls{margin:4px 0 2px}
+  .now.panel-open .lyrics{font-size:27px;font-weight:700;letter-spacing:-.02em;line-height:1.3}
+}

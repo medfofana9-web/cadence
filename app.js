@@ -1730,6 +1730,7 @@ function paintNow(t) {
   const na = $('#now-art'); if (na.dataset.id !== t.id) { na.classList.remove('in'); void na.offsetWidth; na.src = full; na.dataset.id = t.id; na.classList.add('in'); }
   $('#p-title').textContent = t.title; $('#p-artist').textContent = t.artist;
   $('#now-title').textContent = t.title; $('#now-artist').textContent = t.artist;
+  $('#now-mini-title').textContent = t.title; $('#now-mini-artist').textContent = t.artist; $('#now-mini-art').src = artOf(t);
   $('#now-artist').href = '#/artist/' + encodeURIComponent(mainArtist(t.artist));
   $('#now-from').textContent = P.mode === 'flow' ? 'Fof Flow' : P.context ? 'Playing from ' + P.context : '';
   ['#p-like', '#now-like'].forEach(s => $(s).classList.toggle('on', !!t.liked));
@@ -1784,6 +1785,7 @@ function updatePlayIcons() {
 }
 function updateModes() {
   ['#p-shuffle', '#now-shuffle'].forEach(s => { $(s).classList.toggle('on', P.shuffle); $(s).setAttribute('aria-pressed', P.shuffle); });
+  if (P.panel === 'queue' && $('#now').classList.contains('open')) $$('.q-mode').forEach(b => b.classList.toggle('on', b.dataset.action === 'shuffle' ? P.shuffle : P.repeat !== 'off'));
   ['#p-repeat', '#now-repeat'].forEach(s => { $(s).classList.toggle('on', P.repeat !== 'off'); $(s + ' use').setAttribute('href', P.repeat === 'one' ? '#i-repeat1' : '#i-repeat'); $(s).setAttribute('aria-label', { off: 'Repeat off', all: 'Repeat all', one: 'Repeat one' }[P.repeat]); });
 }
 let seeking = false;
@@ -1948,7 +1950,7 @@ function renderQueue() {
   const hist = P.played.slice(0, -1).slice(-20).reverse();
   box.innerHTML = `<div class="queue-panel">
     ${t ? `<h3>Now playing</h3>${row(t.id, P.idx, false).replace('class="track q"', 'class="track q playing"')}` : ''}
-    <div class="q-head"><h3>Up next${P.context && P.mode !== 'flow' ? ' · ' + esc(P.context) : ''}</h3><div class="q-tools">${mine.length ? '<button class="link" data-action="queue-clear">Clear</button>' : ''}<button class="link" data-action="queue-save">Save as playlist</button></div></div>
+    <div class="q-head"><h3>Up next${P.context && P.mode !== 'flow' ? ' · ' + esc(P.context) : ''}</h3><div class="q-tools"><button class="q-mode ${P.shuffle ? 'on' : ''}" data-action="shuffle" aria-label="Shuffle"><svg><use href="#i-shuffle"/></svg></button><button class="q-mode ${P.repeat !== 'off' ? 'on' : ''}" data-action="repeat" aria-label="Repeat"><svg><use href="${P.repeat === 'one' ? '#i-repeat1' : '#i-repeat'}"/></svg></button>${mine.length ? '<button class="link" data-action="queue-clear">Clear</button>' : ''}<button class="link" data-action="queue-save">Save as playlist</button></div></div>
     <div class="q-list" data-sortable="queue">${mine.map(([id, i]) => row(id, i, true)).join('') || '<p class="q-empty">Nothing queued. Use Play next or Add to queue on any song.</p>'}</div>
     <div class="autoplay-row"><div><b>${P.mode === 'flow' ? 'Fof Flow' : P.mode === 'radio' ? 'Radio' : 'Autoplay'}</b><span>${P.mode ? 'Keeps adding songs from your library' : 'Similar songs from your library keep playing when this ends'}</span></div>${P.mode ? `<button class="link" data-action="end-mode">Stop</button>` : `<button class="switch ${S.settings.autoplay ? 'on' : ''}" data-action="toggle-setting" data-key="autoplay" aria-label="Autoplay"></button>`}</div>
     ${auto.length ? `<div class="q-list" data-sortable="queue">${auto.map(([id, i]) => row(id, i, true)).join('')}</div>` : ''}
@@ -2028,9 +2030,10 @@ function confirmSheet(title, body, okLabel, onOk, danger = true) {
   sheet(`<h2>${esc(title)}</h2><p class="muted">${esc(body)}</p><div class="actions"><button class="btn ghost" data-close>Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" id="cf-ok">${esc(okLabel)}</button></div>`, el => { el.querySelector('#cf-ok').onclick = async () => { closeSheet(); await onOk(); }; });
 }
 
-function trackMenu(e, id) {
+function trackMenu(e, id, { player = false } = {}) {
   const t = S.tracks.get(id); if (!t) return;
   menu(e, [
+    ...(player ? [['Sleep timer…', () => setTimeout(() => sleepMenu(e), 50)], [`Speed · ${engine.rate || 1}×`, () => cycleSpeed()], null] : []),
     ['Play next', () => { insertNext([id]); toast('Plays next'); }],
     ['Add to queue', () => { addQueue([id]); toast('Added to queue'); }],
     ['Add to playlist…', () => addToPlaylistSheet([id])],
@@ -2374,7 +2377,7 @@ document.addEventListener('click', async e => {
       case 'like': return like(id);
       case 'like-current': return current() && like(current().id);
       case 'track-menu': return trackMenu(e, id);
-      case 'track-menu-current': return current() && trackMenu(e, current().id);
+      case 'track-menu-current': return current() && trackMenu(e, current().id, { player: true });
       case 'open-now': return openNow();
       case 'close-now': return closeNow();
       case 'open-lyrics': return openNow('lyrics');
@@ -2383,6 +2386,7 @@ document.addEventListener('click', async e => {
         const p = a.dataset.action.slice(4); const n = $('#now');
         if (innerWidth <= 820 && n.classList.contains('panel-open') && P.panel === p) n.classList.remove('panel-open'); else { P.panel = p; n.classList.add('panel-open'); }
         if (p === 'queue') n.classList.remove('lyrics-full');
+        for (const k of ['lyrics', 'queue']) $('#ic-' + k).classList.toggle('on-panel', n.classList.contains('panel-open') && P.panel === k);
         return renderPanel();
       }
       case 'dl': return downloadSongs(a.dataset.ids.split(','), '');

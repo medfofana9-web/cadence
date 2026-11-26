@@ -90,7 +90,9 @@
       <div class="now-meta">
         <div><h2 id="now-title" class="ellipsis"></h2><a id="now-artist" class="ellipsis" href="#/home"></a></div>
         <button class="icon-btn like-btn big" id="now-like" data-action="like-current"><svg><use href="#i-heart"/></svg></button>
+        <button class="icon-btn glass-dot" data-action="track-menu-current" aria-label="More"><svg><use href="#i-more"/></svg></button>
       </div>
+      <div class="now-dock">
       <div class="now-progress">
         <input type="range" id="now-seek" min="0" max="1000" value="0" class="seek" aria-label="Seek">
         <div class="now-times"><span id="now-cur">0:00</span><span id="now-dur">0:00</span></div>
@@ -102,6 +104,12 @@
         <button class="icon-btn big" data-action="next"><svg><use href="#i-next"/></svg></button>
         <button class="icon-btn mode" id="now-repeat" data-action="repeat"><svg><use href="#i-repeat"/></svg></button>
       </div>
+      </div>
+      <div class="now-icons">
+        <button class="icon-btn" data-action="tab-lyrics" id="ic-lyrics" aria-label="Lyrics"><svg><use href="#i-lyrics"/></svg></button>
+        <button class="icon-btn" data-action="airplay" aria-label="AirPlay"><svg><use href="#i-airplay2"/></svg></button>
+        <button class="icon-btn" data-action="tab-queue" id="ic-queue" aria-label="Up next"><svg><use href="#i-list"/></svg></button>
+      </div>
       <div class="now-tools">
         <button class="pill-btn" data-action="tab-lyrics" id="tab-lyrics"><svg><use href="#i-quote"/></svg>Lyrics</button>
         <button class="pill-btn" data-action="tab-queue" id="tab-queue"><svg><use href="#i-queue"/></svg>Up next</button>
@@ -110,7 +118,7 @@
         <button class="pill-btn" data-action="sleep" id="sleep-btn"><svg><use href="#i-moon"/></svg><span>Sleep</span></button>
       </div>
     </div>
-    <div class="now-right"><div id="now-panel" class="now-panel"></div><button class="pill-btn lyrics-return" id="lyrics-return" data-action="lyrics-return" hidden>Back to current line</button></div>
+    <div class="now-right"><div class="now-mini"><img id="now-mini-art" alt=""><div><b id="now-mini-title" class="ellipsis"></b><span id="now-mini-artist" class="ellipsis"></span></div></div><div id="now-panel" class="now-panel"></div><button class="pill-btn lyrics-return" id="lyrics-return" data-action="lyrics-return" hidden>Back to current line</button></div>
   </div>
 </section>
 
@@ -136,13 +144,16 @@
     <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-gear" viewBox="0 0 24 24"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 1.7-1l2.4 1 2-3.4zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></symbol>
     <symbol id="i-library" viewBox="0 0 24 24"><path d="M4 3h3v18H4zm5 0h3v18H9zm5.2.7 2.9-.8 4.7 17.4-2.9.8z"/></symbol>
-    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.6v14.8a1 1 0 0 0 1.5.86l12.3-7.4a1 1 0 0 0 0-1.72L8.5 3.74A1 1 0 0 0 7 4.6z"/></symbol>
-    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="5.5" y="4" width="4.5" height="16" rx="1.2"/><rect x="14" y="4" width="4.5" height="16" rx="1.2"/></symbol>
-    <symbol id="i-next" viewBox="0 0 24 24"><path d="M3.5 6.2v11.6a.8.8 0 0 0 1.2.68L13 13.4V17.8a.8.8 0 0 0 1.2.68l8.6-5.8a.8.8 0 0 0 0-1.36L14.2 5.52a.8.8 0 0 0-1.2.68v4.4L4.7 5.52a.8.8 0 0 0-1.2.68z"/></symbol>
-    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M20.5 6.2v11.6a.8.8 0 0 1-1.2.68L11 13.4V17.8a.8.8 0 0 1-1.2.68l-8.6-5.8a.8.8 0 0 1 0-1.36L9.8 5.52a.8.8 0 0 1 1.2.68v4.4l8.3-5.08a.8.8 0 0 1 1.2.68z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M6.5 4.4c0-1.15 1.25-1.87 2.25-1.29l11.7 6.9c.98.58.98 2 0 2.58l-11.7 6.9c-1 .58-2.25-.14-2.25-1.29z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="5" y="3.5" width="5" height="17" rx="1.6"/><rect x="14" y="3.5" width="5" height="17" rx="1.6"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M1.5 6.9c0-.96 1.04-1.56 1.87-1.08l8.13 4.7V6.9c0-.96 1.04-1.56 1.87-1.08l9.06 5.24c.83.48.83 1.68 0 2.16l-9.06 5.24c-.83.48-1.87-.12-1.87-1.08v-3.62l-8.13 4.7c-.83.48-1.87-.12-1.87-1.08z"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M22.5 6.9c0-.96-1.04-1.56-1.87-1.08l-8.13 4.7V6.9c0-.96-1.04-1.56-1.87-1.08L1.57 11.06c-.83.48-.83 1.68 0 2.16l9.06 5.24c.83.48 1.87-.12 1.87-1.08v-3.62l8.13 4.7c.83.48 1.87-.12 1.87-1.08z"/></symbol>
     <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 7h3.5c2 0 3.2.9 4.3 2.5l2.4 3.6c1.1 1.6 2.3 2.4 4.3 2.4H20M3 17h3.5c1.5 0 2.5-.5 3.3-1.4M13.2 8.4c.8-.9 1.8-1.4 3.3-1.4H20M17.5 4.5 20 7l-2.5 2.5m0 5L20 17l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 11V9.5A3.5 3.5 0 0 1 7.5 6H19m-3-3 3 3-3 3M20 13v1.5a3.5 3.5 0 0 1-3.5 3.5H5m3 3-3-3 3-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-repeat1" viewBox="0 0 24 24"><path d="M4 11V9.5A3.5 3.5 0 0 1 7.5 6H19m-3-3 3 3-3 3M20 13v1.5a3.5 3.5 0 0 1-3.5 3.5H5m3 3-3-3 3-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M11.2 10.3 12.6 9.5V14.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-lyrics" viewBox="0 0 24 24"><path d="M4.5 3.5h15a2.5 2.5 0 0 1 2.5 2.5v9a2.5 2.5 0 0 1-2.5 2.5H10.2L5.6 21c-.5.4-1.1 0-1.1-.6v-2.9A2.5 2.5 0 0 1 2 15V6a2.5 2.5 0 0 1 2.5-2.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M7.6 12.4c1.3-.4 2.1-1.3 2.1-2.6 0-.8-.5-1.4-1.3-1.4-.7 0-1.2.5-1.2 1.2 0 .6.4 1 1 1.1M12.6 12.4c1.3-.4 2.1-1.3 2.1-2.6 0-.8-.5-1.4-1.3-1.4-.7 0-1.2.5-1.2 1.2 0 .6.4 1 1 1.1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-airplay2" viewBox="0 0 24 24"><path d="M5.6 16.6a9 9 0 1 1 12.8 0M8.4 13.9a5 5 0 1 1 7.2 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M11.2 14.6c.4-.5 1.2-.5 1.6 0l4 4.9c.5.6.1 1.5-.8 1.5H8c-.9 0-1.3-.9-.8-1.5z"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><circle cx="4.2" cy="6" r="1.5"/><circle cx="4.2" cy="12" r="1.5"/><circle cx="4.2" cy="18" r="1.5"/><path d="M8.5 6h12.5M8.5 12h12.5M8.5 18h12.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
     <symbol id="i-quote" viewBox="0 0 24 24"><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-9l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm3 4.2v1.6h10V9.2zm0 3.2V14h6.5v-1.6z"/></symbol>
     <symbol id="i-queue" viewBox="0 0 24 24"><path d="M3 5h13v2H3zm0 5h13v2H3zm0 5h8v2H3zm11 0v6l5-3z"/></symbol>
     <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
