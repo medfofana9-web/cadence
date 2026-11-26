@@ -1,6 +1,6 @@
 import { db, kv, persist, storageInfo, isQuotaError } from './lib/store.js';
 import * as meta from './lib/meta.js';
-import { findSong, fetchFirstImage } from './lib/identify.js';
+import { findSong, fetchFirstImage, artistPhoto } from './lib/identify.js';
 import * as cloud from './lib/cloud.js';
 import { Engine, IS_IOS } from './lib/engine.js';
 import { Index, fold } from './lib/search.js';
@@ -24,7 +24,7 @@ const P = {
   listen: null, preloadFor: null, fadeStarted: false,
 };
 const DEFAULTS = {
-  autoplay: true, accent: 'fof', autoFix: true, askUnsure: false, volume: 1, theme: 'dark', density: 'comfortable', reduceMotion: false,
+  autoplay: true, accent: 'fof', autoFix: true, askUnsure: false, autoOffline: true, volume: 1, theme: 'dark', density: 'comfortable', reduceMotion: false,
   crossfade: 0, gapless: true, leveling: true, hideExplicit: false, keepHistory: true, songSort: 'added', songDir: -1,
 };
 const ACCENTS = { fof: ['#ff2e3e', '255,46,62', '#ffffff'], coral: ['#ff6a4d', '255,106,77', '#1a0703'], amber: ['#f5b041', '245,176,65', '#1d1302'], sky: ['#5ab4ff', '90,180,255', '#03121f'], mint: ['#4fd1a1', '79,209,161', '#02180f'], lilac: ['#b69cff', '182,156,255', '#120a24'], rose: ['#ff5c8a', '255,92,138', '#22040f'] };
@@ -222,6 +222,7 @@ async function boot() {
   setInterval(() => { if (S.folder && S.folderState !== 'needs-permission' && !IMP.running) scanFolder(); }, 2 * 60 * 1000);
   // songs that couldn't upload earlier (bad Wi-Fi, signed out) go up on their own
   setInterval(() => autoUpload(), 5 * 60 * 1000);
+  setTimeout(autoOffline, 20000); setInterval(autoOffline, 15 * 60 * 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkVersion(); if (S.folder && Date.now() - (S.lastScan || 0) > 30000) scanFolder(); if (S.user && Date.now() - S.lastSync > 60000) syncDown(); } else { flushListen(); savePlayer(true); } });
   window.addEventListener('online', () => { if (S.user) { syncDown(); setTimeout(autoUpload, 5000); } });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -349,12 +350,13 @@ async function checkVersion() {
     if (!r.ok) return;
     const { version } = await r.json();
     if (!S.version) S.version = version;
-    else if (version !== S.version) $('#update-bar').classList.add('show');
+    else if (version !== S.version) { if (IN_APP && engine.el.paused && !IMP.running) return applyUpdate(); $('#update-bar').classList.add('show'); }
   } catch {}
 }
 async function applyUpdate() {
   flushListen(); await savePlayer(true);
   if ('caches' in window) for (const k of await caches.keys()) await caches.delete(k);
+  try { await fetch('./', { cache: 'reload' }); await fetch('index.html', { cache: 'reload' }); } catch {}
   location.reload();
 }
 
@@ -414,7 +416,7 @@ function rowHtml(t, i, key, opts) {
     ${opts.sortable ? '<div class="handle" title="Drag to reorder"><svg><use href="#i-grip"/></svg></div>' : ''}
     <div class="num"><span class="n">${i + 1}</span><span class="eq"><i></i><i></i><i></i></span><svg class="hover-icon"><use href="#i-play"/></svg></div>
     <div class="th"><img loading="lazy" decoding="async" src="${artOf(t)}" alt=""></div>
-    <div class="tmain"><div class="tt ellipsis">${esc(t.title)}${t.explicit ? '<span class="explicit">E</span>' : ''}</div><div class="ta ellipsis">${artistCredits(t.artist).map(name => `<a href="#/artist/${encodeURIComponent(name)}">${esc(name)}</a>`).join(', ')}</div></div>
+    <div class="tmain"><div class="tt ellipsis">${esc(t.title)}${t.explicit ? '<span class="explicit">E</span>' : ''}${t.downloaded ? '<svg class="saved-mark" aria-label="On this device"><use href="#i-saved"/></svg>' : ''}</div><div class="ta ellipsis">${artistCredits(t.artist).map(name => `<a href="#/artist/${encodeURIComponent(name)}">${esc(name)}</a>`).join(', ')}</div></div>
     ${opts.cols.map(c => c === 'album' ? `<div class="tc ellipsis">${t.album ? `<a href="#/album/${encodeURIComponent(t.album + '\u0001' + albumArtist(t))}">${esc(t.album)}</a>` : `<span class="dim">${esc(t.category === 'Music' ? '' : t.category)}</span>`}</div>`
       : c === 'added' ? `<div class="tc">${ago(t.addedAt)}</div>` : c === 'plays' ? `<div class="tc num-r">${t.plays || 0}</div>` : `<div class="tc">${ago(t.lastPlayed)}</div>`).join('')}
     <button class="icon-btn like-btn ${t.liked ? 'on' : ''}" data-action="like" data-id="${t.id}" aria-label="Like"><svg><use href="#i-heart"/></svg></button>
@@ -738,7 +740,7 @@ VIEWS.home = () => {
   ${because.map(([a, ts]) => { const k = listKey(ts.map(t => t.id), 'Because you played ' + a); return shelf(`More Like ${a}`, ts.map((t, i) => trackCard(t, k, i)).join('')); }).join('')}
   ${discover.length >= 3 ? shelf('Rediscover', discover.map((t, i) => trackCard(t, discoverKey, i)).join('')) : ''}
   ${shelf('Recently Added', added.map((t, i) => trackCard(t, addedKey, i)).join(''), { more: 'songs' })}
-  ${favArtists.length ? shelf(hasTaste ? 'Favorite Artists' : 'Artists', favArtists.map(([a]) => { const ts = groups('artist').get(a) || []; return collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artOf(ts.find(t => S.thumbs.has(t.id) || S.art.has(t.id)) || ts[0]) }); }).join(''), { more: 'artists' }) : ''}
+  ${favArtists.length ? shelf(hasTaste ? 'Favorite Artists' : 'Artists', favArtists.map(([a]) => { const ts = groups('artist').get(a) || []; return collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artistImg(ts, a) }); }).join(''), { more: 'artists' }) : ''}
   ${S.log.length >= 5 ? `<a class="insights-link" href="#/insights"><svg><use href="#i-chart"/></svg><div><b>Replay</b><span>${hours(S.log.reduce((a, e) => a + (e.s || 0), 0))} listened</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''}`;
 };
 function ctxTile(c) {
@@ -898,11 +900,28 @@ VIEWS.songs = () => {
     <div class="list-meta muted">${count(list.length)} · ${total(list)}</div>
     ${trackRows(list, { key: k, context: cat || 'Songs', cols: ['album', ...(list.some(t => Date.now() - (t.addedAt || 0) > DAY) ? ['added'] : []), ...(list.some(t => t.plays) ? ['plays'] : [])], sortKey: S.settings.songSort, sortDir: S.settings.songDir, sortScope: 'songs' })}`;
 };
-const artistImg = ts => artOf(ts.find(t => S.thumbs.has(t.id) || S.art.has(t.id)) || ts[0]);
+/** Artist pictures: a real photo when Deezer has one for this exact name, otherwise one of their covers. */
+const ARTIST_PICS = {}; let picsLoaded = false, picQueue = [], picBusy = false, picRender;
+kv.get('artistPics', {}).then(v => { Object.assign(ARTIST_PICS, v); picsLoaded = true; });
+async function nextPic() {
+  if (picBusy || !navigator.onLine) return; picBusy = true;
+  while (picQueue.length) {
+    const name = picQueue.shift(); const k = fold(name); if (k in ARTIST_PICS) continue;
+    try { ARTIST_PICS[k] = await artistPhoto(name) || ''; } catch { break; }
+    kv.set('artistPics', ARTIST_PICS);
+    if (ARTIST_PICS[k]) { clearTimeout(picRender); picRender = setTimeout(() => { if (['artists', 'artist', 'home'].includes(S.route)) render(); }, 800); }
+    await new Promise(r => setTimeout(r, 250));
+  }
+  picBusy = false;
+}
+const artistImg = (ts, name) => {
+  if (name && picsLoaded && !/^unknown/i.test(name)) { const k = fold(name); if (ARTIST_PICS[k]) return ARTIST_PICS[k]; if (!(k in ARTIST_PICS) && !picQueue.includes(name)) { picQueue.push(name); setTimeout(nextPic, 300); } }
+  return artOf(ts.find(t => S.thumbs.has(t.id) || S.art.has(t.id)) || ts[0]);
+};
 VIEWS.artists = () => {
   const g = [...groups('creditedArtist')].sort((a, b) => a[0].localeCompare(b[0]));
   if (!g.length) return `<div class="page-head"><h1>Artists</h1></div>${emptyLib()}`;
-  return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Artists</h1></div><span class="muted">${g.length}</span></div><div class="grid">${g.map(([a, ts]) => collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artistImg(ts) })).join('')}</div>`;
+  return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Artists</h1></div><span class="muted">${g.length}</span></div><div class="grid">${g.map(([a, ts]) => collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artistImg(ts, a) })).join('')}</div>`;
 };
 VIEWS.artist = () => {
   const name = S.param; const ts = groups('creditedArtist').get(name) || [];
@@ -911,12 +930,12 @@ VIEWS.artist = () => {
   const albums = [...groups('album')].filter(([k, a]) => k.split('\u0001')[1] === name || a.some(t => mainArtist(t.artist) === name));
   const rel = [...relatedArtists([name])].map(a => [a, groups('artist').get(a)]).filter(x => x[1]).slice(0, 12);
   const listened = ts.reduce((a, t) => a + (t.plays || 0), 0);
-  return `${back()}${collHead({ img: artistImg(ts), tracks: popular, eyebrow: 'Artist', title: name, meta: `${count(ts.length)}${albums.length ? ` · ${albums.length} album${albums.length > 1 ? 's' : ''}` : ''}${listened ? ` · ${listened} play${listened > 1 ? 's' : ''}` : ''}`, round: true, ctxRoute: 'artist/' + name,
+  return `${back()}${collHead({ img: artistImg(ts, name), tracks: popular, eyebrow: 'Artist', title: name, meta: `${count(ts.length)}${albums.length ? ` · ${albums.length} album${albums.length > 1 ? 's' : ''}` : ''}${listened ? ` · ${listened} play${listened > 1 ? 's' : ''}` : ''}`, round: true, ctxRoute: 'artist/' + name,
     actions: `<button class="btn ghost" data-action="radio-artist" data-name="${esc(name)}"><svg><use href="#i-radio"/></svg>Artist radio</button>${dlButton(ts)}${groups('artist').has(name) ? `<button class="btn ghost" data-action="artist-genre" data-name="${esc(name)}">${esc(ts.find(t => t.genre)?.genre || 'Set genre')}</button>` : ''}` })}
     <section class="section"><div class="section-head"><h2>${listened ? 'Popular in your library' : 'Songs'}</h2></div>${trackRows(popular.slice(0, ts.length > 8 ? 5 : 8), { context: name, header: false, cols: ['album'] })}</section>
     ${albums.length ? shelf('Albums', albums.map(([k, a]) => collCard({ href: 'album/' + k, title: k.split('\u0001')[0], sub: a[0].year || count(a.length), tracks: a })).join('')) : ''}
     ${ts.length > 8 ? `<section class="section"><div class="section-head"><h2>All songs</h2></div>${trackRows(sorted(ts, 'title', 1), { context: name, cols: ['album', 'plays'] })}</section>` : ''}
-    ${rel.length ? shelf('Similar Artists', rel.map(([a, x]) => collCard({ href: 'artist/' + a, title: a, sub: 'Artist', tracks: x, round: true, img: artistImg(x) })).join('')) : ''}`;
+    ${rel.length ? shelf('Similar Artists', rel.map(([a, x]) => collCard({ href: 'artist/' + a, title: a, sub: 'Artist', tracks: x, round: true, img: artistImg(x, a) })).join('')) : ''}`;
 };
 VIEWS.albums = () => {
   const g = [...groups('album')].sort((a, b) => a[0].localeCompare(b[0]));
@@ -1024,8 +1043,8 @@ VIEWS.insights = () => {
 /* =====================================================================
    Review tray: songs Fof Music isn't sure about
    ===================================================================== */
-function needsReview(t) {
-  if (!S.settings.askUnsure) return false; // songs that can't be identified keep their cleaned-up name
+function needsReview(t, always = false) {
+  if (!S.settings.askUnsure && !always) return false; // songs that can't be identified keep their cleaned-up name
   if (t.reviewed || t.edited || t.matched) return false;
   if (t.artist === 'Unknown Artist' || meta.looksLikeChannel(t.artist, S.channels)) return true;
   if (t.category !== 'Music') return false;
@@ -1034,7 +1053,7 @@ function needsReview(t) {
   // artist came straight from a download's tag, with no "Artist - Title" in the name to confirm it
   return !!(o && !meta.isReliable(o) && o.artist && fold(o.artist) === fold(t.artist) && !/\s[-–—]\s/.test(o.title || ''));
 }
-const reviewList = () => [...S.tracks.values()].filter(needsReview).sort(byAdded);
+const reviewList = (always = false) => [...S.tracks.values()].filter(t => needsReview(t, always)).sort(byAdded);
 function reviewRow(t) {
   const chan = t.original?.artist && fold(t.original.artist) === fold(t.artist) ? t.artist : '';
   return `<div class="rv" data-rv="${t.id}">
@@ -1045,14 +1064,14 @@ function reviewRow(t) {
       <div class="rv-meta"><span class="dim ellipsis">${esc(t.original?.file || t.file || '')}</span>${chan ? `<button class="link" data-action="rv-channel" data-id="${t.id}" data-name="${esc(chan)}">Is “${esc(chan)}” a channel, not the artist?</button>` : ''}</div>
       <div class="chips small">${GENRES.slice(0, 10).map(g => `<button class="chip ${t.genre === g ? 'on' : ''}" data-action="rv-genre" data-id="${t.id}" data-g="${esc(g)}">${esc(g)}</button>`).join('')}</div>
     </div>
-    <div class="rv-actions"><button class="btn small" data-action="play-one" data-id="${t.id}" aria-label="Play"><svg><use href="#i-play"/></svg></button><button class="btn small primary" data-action="rv-ok" data-id="${t.id}">Looks good</button></div>
+    <div class="rv-actions"><button class="btn small" data-action="play-one" data-id="${t.id}" aria-label="Play"><svg><use href="#i-play"/></svg></button><button class="btn small primary" data-action="rv-ok" data-id="${t.id}">Keep</button></div>
   </div>`;
 }
 VIEWS.review = () => {
-  const list = reviewList();
+  const list = reviewList(true);
   const artists = knownArtists();
-  return `${back()}<div class="page-head"><div><div class="eyebrow">Library</div><h1>Check these</h1><div class="lede">Fof Music wasn’t sure about these names. Fix what’s wrong and tap Looks good. What you correct is remembered for future imports.</div></div>
-    ${list.length > 1 ? `<button class="btn ghost" data-action="rv-all">Mark all as good</button>` : ''}</div>
+  return `${back()}<div class="page-head"><div><div class="eyebrow">Library</div><h1>Songs to Name</h1><div class="lede">Not found in Apple Music, Deezer or by sound. Fix the name or keep it.</div></div>
+    ${list.length > 1 ? `<button class="btn ghost" data-action="rv-all">Keep all</button>` : ''}</div>
     <datalist id="artist-list">${artists.map(a => `<option value="${esc(a)}">`).join('')}</datalist>
     ${list.length ? `<div class="rv-list">${list.map(reviewRow).join('')}</div>` : '<div class="empty-state small"><div class="empty-mark"><svg><use href="#i-check"/></svg></div><h2>All clear</h2><p>Every song has a name and artist Fof Music is confident about.</p></div>'}`;
 };
@@ -1570,8 +1589,9 @@ VIEWS.settings = () => {
       ${sw('autoFix', 'Fix names and artwork on import', 'Recognizes each song by its sound, then checks Apple Music and Deezer for the real name and album artwork. Songs with complete tags keep their own names.')}
       <div class="set-row"><div class="lbl"><b>Fix all songs again</b><span>Re-checks names and artwork for songs you haven’t edited yourself</span></div><button class="btn" data-action="refix-all">Fix all</button></div>
       ${CAN_WATCH ? `<div class="set-row"><div class="lbl"><b>Auto-import folder</b><span>${S.folder ? `Watching “${esc(S.folder.name)}”` : 'Not connected. New songs saved to a folder you pick are added automatically.'}</span></div>${S.folder ? '<button class="btn ghost" data-action="disconnect-folder">Stop watching</button>' : '<button class="btn" data-action="connect-folder">Connect folder</button>'}</div>` : ''}
+      ${IN_APP || IS_IOS ? sw('autoOffline', 'Keep favorites on this phone', 'Liked songs and your most played are saved here, so they play with no signal') : ''}
       ${sw('askUnsure', 'Ask me about songs it can’t identify', 'Off: songs that aren’t found by sound or in Apple Music or Deezer keep their cleaned-up name and a designed cover. On: they’re listed in Check these.')}
-      ${S.settings.askUnsure ? `<div class="set-row"><div class="lbl"><b>Check these</b><span>${reviewList().length ? `${count(reviewList().length)} with names Fof Music isn’t sure about` : 'Nothing to check'}</span></div><a class="btn" href="#/review">Open</a></div>` : ''}
+      ${(() => { const n = reviewList(true).length; return `<div class="set-row"><div class="lbl"><b>Songs to name</b><span>${n ? `${count(n)} not found in any catalog` : 'Every song is named'}</span></div>${n ? '<a class="btn" href="#/review">Fix</a>' : ''}</div>`; })()}
       ${S.channels.length ? `<div class="set-row"><div class="lbl"><b>Channels, not artists</b><span>${S.channels.map(esc).join(', ')}</span></div><button class="btn ghost" data-action="clear-channels">Reset</button></div>` : ''}
       <div class="set-row"><div class="lbl"><b>Possible duplicates</b><span>${dups ? `${dups} group${dups > 1 ? 's' : ''} to review` : 'None found'}</span></div><a class="btn" href="#/duplicates">Review</a></div>
       <div class="set-row"><div class="lbl"><b>Storage on this device</b><span id="storage-used">${count(local)} saved here</span></div>${S.user ? '<button class="btn ghost" data-action="clear-device">Remove downloads</button>' : ''}</div></div>`; },
@@ -1607,10 +1627,11 @@ VIEWS.settings = () => {
    Player
    ===================================================================== */
 async function srcFor(t) {
+  if (!t.local && P.prefetchId === t.id && P.objUrls.has(t.id)) return P.objUrls.get(t.id); // downloaded ahead while the last song played
   const blob = t.local ? await db.get('audio', t.id) : null;
   if (blob) {
     if (!P.objUrls.has(t.id)) P.objUrls.set(t.id, URL.createObjectURL(blob));
-    for (const [id, u] of P.objUrls) if (id !== t.id && id !== current()?.id && id !== P.preloadFor) { URL.revokeObjectURL(u); P.objUrls.delete(id); }
+    for (const [id, u] of P.objUrls) if (id !== t.id && id !== current()?.id && id !== P.preloadFor && id !== P.prefetchId) { URL.revokeObjectURL(u); P.objUrls.delete(id); }
     return P.objUrls.get(t.id);
   }
   if (t.local && !blob) { t.local = false; t.downloaded = false; await saveTrack(t, { sync: false }); } // the file was removed elsewhere
@@ -1796,6 +1817,23 @@ function updateModes() {
 }
 let seeking = false;
 let lastSpotSave = 0;
+let prefetching = false;
+async function prefetchNext() {
+  const n = peekNext(); if (!n || prefetching || P.prefetchId === n.id) return;
+  const t = S.tracks.get(n.id); if (!t || t.local || !t.cloud || !S.user) return;
+  prefetching = true; const id = t.id;
+  try {
+    const u = await cloud.fileUrl('audio/' + id, t.store === 'r2' || cloud.r2On());
+    const r = u && await fetch(u);
+    if (r?.ok) {
+      const raw = await r.blob();
+      const type = /^audio\//.test(raw.type) ? raw.type : 'audio/mpeg';
+      const old = P.objUrls.get(P.prefetchId); if (P.prefetchId && old?.startsWith('blob:') && P.prefetchId !== current()?.id) { URL.revokeObjectURL(old); P.objUrls.delete(P.prefetchId); }
+      P.objUrls.set(id, URL.createObjectURL(new Blob([raw], { type }))); P.prefetchId = id;
+    }
+  } catch (e) { console.warn('prefetch', e); }
+  prefetching = false;
+}
 function onTime() {
   const el = engine.el, d = el.duration || 0, c = el.currentTime || 0;
   if (!el.paused && Date.now() - lastSpotSave > 5000) { lastSpotSave = Date.now(); savePlayer(true); } // the spot survives the app being closed
@@ -1811,6 +1849,8 @@ function onTime() {
   if (t && !P.counted && d && c > Math.min(30, d * .5)) { P.counted = true; t.plays = (t.plays || 0) + 1; t.lastPlayed = Date.now(); saveTrack(t); addHistory(t.id); }
   if (P.lyrics?.lines && P.panel === 'lyrics' && $('#now').classList.contains('open')) syncLyrics(c);
   if (P.sleepAt) { if (Date.now() >= P.sleepAt) { el.pause(); clearSleep(); toast('Sleep timer ended'); } else $('#sleep-btn span').textContent = fmt((P.sleepAt - Date.now()) / 1000); }
+  // iPhone plays one song at a time: download the next one in the background so skipping starts instantly
+  if (!engine.dual && c > 4 && !el.paused && navigator.onLine) prefetchNext();
   // gapless / crossfade: buffer the next song near the end, then switch
   const remain = d - c;
   const cf = engine.dual ? S.settings.crossfade : 0;
@@ -1881,7 +1921,7 @@ function dragSeek(sel) {
     const set = ev => { r.value = Math.round(at(ev.clientX) * 1000); r.dispatchEvent(new Event('input')); };
     set(e);
     const mv = ev => set(ev);
-    const up = () => { r.removeEventListener('pointermove', mv); r.removeEventListener('pointerup', up); r.removeEventListener('pointercancel', up); r.classList.remove('dragging'); r.dispatchEvent(new Event('change')); navigator.vibrate?.(8); };
+    const up = () => { r.removeEventListener('pointermove', mv); r.removeEventListener('pointerup', up); r.removeEventListener('pointercancel', up); r.classList.remove('dragging'); r.dispatchEvent(new Event('change')); haptic(); };
     r.addEventListener('pointermove', mv); r.addEventListener('pointerup', up); r.addEventListener('pointercancel', up);
   });
 }
@@ -2338,6 +2378,22 @@ async function refixAll() {
 let uploading = false;
 /** Quietly uploads songs that are still only on this device. */
 function autoUpload() { return oneTab('upload', autoUploadNow); }
+/** On the phone: liked songs and your most played are kept on the device, so they play with no signal. */
+function autoOffline() { return oneTab('offline', autoOfflineNow); }
+async function autoOfflineNow() {
+  if (!(IN_APP || IS_IOS) || !S.user || !navigator.onLine || downloading || S.settings.autoOffline === false) return;
+  const all = [...S.tracks.values()].filter(t => t.cloud);
+  const top = all.filter(t => t.plays > 0).sort((a, b) => (b.plays || 0) - (a.plays || 0)).slice(0, 60);
+  const want = [...new Set([...all.filter(t => t.liked), ...top])].filter(t => !t.local).slice(0, 25);
+  for (const t of want) {
+    if (!navigator.onLine || current()?.id === t.id) continue;
+    try {
+      const u = await cloud.fileUrl('audio/' + t.id, t.store === 'r2' || cloud.r2On()); if (!u) continue;
+      const b = await (await fetch(u)).blob(); if (!b.size) continue;
+      await db.put('audio', t.id, b); t.local = true; t.downloaded = true; t.autoSaved = true; await saveTrack(t, { sync: false });
+    } catch (e) { if (isQuotaError(e)) break; }
+  }
+}
 function autoUploadNow() {
   if (!S.user || !navigator.onLine || uploading || IMP.running) return;
   if ([...S.tracks.values()].some(t => t.local && !t.cloud)) return uploadLocal({ quiet: true });
@@ -2423,7 +2479,7 @@ document.addEventListener('click', async e => {
       case 'scan-folder': return scanFolder({ user: true });
       case 'clear-channels': S.channels = []; await kv.set('channels', []); queueStatePush(); return render();
       case 'rv-ok': { const row = a.closest('.rv'); await saveReview(id, { approve: true }); row?.classList.add('done'); setTimeout(() => { if (S.route === 'review') render(); }, 260); renderBadge(); return; }
-      case 'rv-all': for (const t of reviewList()) { t.reviewed = true; await saveTrack(t); } render(); return toast('All marked as good');
+      case 'rv-all': for (const t of reviewList(true)) { t.reviewed = true; await saveTrack(t); } render(); return toast('All marked as good');
       case 'rv-channel': return markChannel(a.dataset.name);
       case 'rv-genre': { await setGenre(id, a.dataset.g); const t = S.tracks.get(id); a.parentElement.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c.dataset.g === t.genre)); return; }
       case 'rv-art': return pickImage(async f => { const t = S.tracks.get(id); await setArt(t, f); t.designedCover = false; await saveTrack(t); if (S.user && t.cloud) cloud.uploadFile('art/' + t.id, f).catch(syncFailed); render(); });
