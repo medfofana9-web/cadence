@@ -2064,10 +2064,11 @@ async function repairMatches() {
 /** One-time pass: songs without a confirmed match are listened to and looked up again (on the device that has the files). */
 async function identifyLibrary() {
   if (await kv.get('identify-v1') || !navigator.onLine) return;
-  const todo = [...S.tracks.values()].filter(t => t.local && !t.edited && !t.reviewed && (!t.matched || t.designedCover) && t.category === 'Music');
+  // only songs that need it: messy names or a placeholder cover (songs with proper tags already have both right)
+  const todo = [...S.tracks.values()].filter(t => t.local && !t.edited && !t.reviewed && t.category === 'Music' && (t.designedCover || (!t.matched && !meta.isReliable(t.original || {}))));
   if (!todo.length) { await kv.set('identify-v1', true); return; }
   let found = 0;
-  for (const t of todo) { if (!navigator.onLine) return; try { if (await rematch(t)) found++; } catch (e) { console.warn('identify', e); } }
+  for (const t of todo) { if (!navigator.onLine) return; try { if (await rematch(t)) found++; } catch (e) { console.warn('identify', e); } await new Promise(r => setTimeout(r, 1500)); } // gentle on Apple's search limits
   await kv.set('identify-v1', true);
   S.ver++; render();
   if (found) toast(`Identified ${count(found)} by sound and fixed their names and artwork`);
