@@ -2592,6 +2592,7 @@ document.addEventListener('click', async e => {
       case 'pod-play': return podPlay(id);
       case 'artist-more': e.preventDefault(); return artistSheet();
       case 'dz-preview': return dzPreview(a);
+      case 'yt': { e.stopPropagation(); dzStop(false); const url = 'https://www.youtube.com/results?search_query=' + encodeURIComponent(a.dataset.q + ' official video'); if (IN_APP) location.href = url; else window.open(url, '_blank', 'noopener'); return; }
       case 'go-artist': { closeSheet?.(); closeNow(); return setTimeout(() => go('artist/' + encodeURIComponent(a.dataset.name)), 60); }
       case 'rp-story': return replayStory();
       case 'eq': return eqSheet();
@@ -3375,7 +3376,7 @@ async function fillDiscover() {
     const have = new Set(visible().map(t => nrm(t.title)));
     const missing = top.filter(r => !have.has(nrm(r.title))).filter((r, i, a) => a.findIndex(x => nrm(x.title) === nrm(r.title)) === i).slice(0, 6);
     if (!missing.length) continue;
-    box.innerHTML = `<div class="am-sub">Not in your library yet</div><div class="am-list">${missing.map(r => `<div class="am-row am-dz-row" data-action="dz-preview" data-url="${esc(r.preview)}" data-title="${esc(r.title)}"><span class="am-dz-art"><img loading="lazy" src="${esc(r.art)}" alt=""><span class="am-dz-btn">${icon(DZ.url === r.preview ? 'pause' : 'play')}</span></span><span class="am-main"><b class="ellipsis">${esc(r.title)}</b><em class="ellipsis">${esc(r.album)} · Preview</em></span></div>`).join('')}</div>`;
+    box.innerHTML = `<div class="am-sub">Not in your library yet</div><div class="am-list">${missing.map(r => `<div class="am-row am-dz-row" data-action="dz-preview" data-url="${esc(r.preview)}" data-title="${esc(r.title)}"><span class="am-dz-art"><img loading="lazy" src="${esc(r.art)}" alt=""><span class="am-dz-btn">${icon(DZ.url === r.preview ? 'pause' : 'play')}</span></span><span class="am-main"><b class="ellipsis">${esc(r.title)}</b><em class="ellipsis">${esc(r.album)} · Preview</em></span><button class="am-yt" data-action="yt" data-q="${esc(name + ' ' + r.title)}" aria-label="Watch on YouTube"><svg viewBox="0 0 28 20"><rect width="28" height="20" rx="5.5" fill="#ff0033"/><path d="M11.2 6v8l7-4z" fill="#fff"/></svg></button></div>`).join('')}</div>`;
   }
 }
 const DZ = { el: null, url: '', resume: false };

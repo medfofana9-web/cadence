@@ -1207,3 +1207,6 @@ label.search-box{display:block}
 .am-dz-btn{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.35);border-radius:7px}
 .am-dz-btn svg{width:16px;height:16px;color:#fff}
 .am-dz-row.previewing .am-main b{color:var(--accent)}
+.am-yt{margin-left:auto;flex:none;width:44px;height:36px;display:grid;place-items:center;border-radius:10px}
+.am-yt svg{width:28px;height:20px}
+.am-yt:active{transform:scale(.92)}
