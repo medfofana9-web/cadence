@@ -440,6 +440,7 @@ function afterRender() {
   if (S.route === 'search') refreshDiscover();
   if (S.route === 'import') bindImport();
   if (S.route === 'podcasts') bindPodSearch();
+  paintTime();
   requestAnimationFrame(() => $$('.shelf').forEach(sh => sh.closest('.section')?.classList.toggle('fits', sh.scrollWidth <= sh.clientWidth + 4)));
   renderBadge();
   $$('[data-sortable]').forEach(el => makeSortable(el, el.dataset.sortable));
@@ -892,7 +893,7 @@ function refreshDiscover() {
 
 VIEWS.search = () => {
   const q = S.param;
-  const input = `<div class="search-box"><svg><use href="#i-search"/></svg><input id="search-input" class="input" aria-label="Search music" placeholder="Search your library and discover music" value="${esc(q)}" autocomplete="off" spellcheck="false" enterkeyhint="search">${q ? '<button class="icon-btn small clear-q" data-action="clear-q" aria-label="Clear"><svg><use href="#i-x"/></svg></button>' : ''}</div>`;
+  const input = `<div class="search-box"><svg><use href="#i-search"/></svg><input id="search-input" class="input" aria-label="Search music" placeholder="Songs, artists, albums" value="${esc(q)}" autocomplete="off" spellcheck="false" enterkeyhint="search">${q ? '<button class="icon-btn small clear-q" data-action="clear-q" aria-label="Clear"><svg><use href="#i-x"/></svg></button>' : ''}</div>`;
   if (!q) {
     const gs = [...groups('mix')].sort((a, b) => b[1].length - a[1].length);
     return `<div class="page-head"><h1>Search</h1></div>${input}
@@ -1904,16 +1905,21 @@ async function prefetchNext() {
   } catch (e) { console.warn('prefetch', e); }
   prefetching = false;
 }
+/** Every progress bar and time label shows where the song really is — including a paused spot that hasn't been reloaded yet. */
+function paintTime() {
+  const el = engine.el, t = current(), c = spotNow(), d = el.duration || t?.duration || 0, f = d ? Math.min(1, c / d) : 0;
+  if (!seeking) {
+    for (const s of ['#p-seek', '#now-seek']) { const r = $(s); r.value = f * 1000; paintRange(r); }
+    $('#p-cur').textContent = $('#now-cur').textContent = fmt(c);
+    $('#p-dur').textContent = $('#now-dur').textContent = '-' + fmt(Math.max(0, d - c));
+  }
+  $('#p-mini-bar').style.transform = `scaleX(${f})`;
+  const hb = document.getElementById('hero-bar'); if (hb) hb.style.transform = `scaleX(${f})`;
+}
 function onTime() {
   const el = engine.el, d = el.duration || 0, c = el.currentTime || 0;
   if (!el.paused && Date.now() - lastSpotSave > 5000) { lastSpotSave = Date.now(); savePlayer(true); } // the spot survives the app being closed
-  if (!seeking) {
-    for (const s of ['#p-seek', '#now-seek']) { const r = $(s); r.value = d ? c / d * 1000 : 0; paintRange(r); }
-    $('#p-cur').textContent = $('#now-cur').textContent = fmt(c);
-    $('#p-dur').textContent = $('#now-dur').textContent = '-' + fmt(d - c);
-  }
-  $('#p-mini-bar').style.transform = `scaleX(${d ? c / d : 0})`;
-  const hb = document.getElementById('hero-bar'); if (hb) hb.style.transform = `scaleX(${d ? c / d : 0})`;
+  paintTime();
   const t = current();
   if (P.listen && !el.paused) { const now = performance.now(); if (P.tick) P.listen.s += Math.min((now - P.tick) / 1000, 1.5); P.tick = now; }
   if (t && !t.ext && !P.counted && d && c > Math.min(30, d * .5)) { P.counted = true; t.plays = (t.plays || 0) + 1; t.lastPlayed = Date.now(); saveTrack(t); addHistory(t.id); }

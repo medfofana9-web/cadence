@@ -1102,3 +1102,11 @@ button.set-row{width:100%;text-align:left}
 .set-val{display:flex;align-items:center;gap:10px;color:var(--muted)}
 .set-val .chev{margin-left:0}
 .pod-search .search-box{display:block}
+
+/* iPhone-style settings rows: the switch always sits on the right of its label */
+.set-row:has(> .switch){flex-wrap:nowrap}
+.set-row:has(> .switch) .lbl{flex:1}
+.switch{width:51px;height:31px;border-radius:16px}
+.switch::after{width:27px;height:27px;top:2px;left:2px}
+.switch.on::after{transform:translateX(20px)}
+.settings-tabs,.seg-scroll{scrollbar-width:none}
