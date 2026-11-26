@@ -325,6 +325,7 @@ function render() {
 function afterRender() {
   if (S.route === 'search') { const i = $('#search-input'); if (i && document.activeElement !== i && !('ontouchstart' in window)) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
   if (S.route === 'import') bindImport();
+  requestAnimationFrame(() => $$('.shelf').forEach(sh => sh.closest('.section')?.classList.toggle('fits', sh.scrollWidth <= sh.clientWidth + 4)));
   renderBadge();
   $$('[data-sortable]').forEach(el => makeSortable(el, el.dataset.sortable));
   mountVisible();
@@ -422,7 +423,7 @@ function tile({ href, title, tracks, img }) {
 }
 function shelf(title, inner, { more, sub } = {}) {
   if (!inner) return '';
-  return `<section class="section"><div class="section-head"><div><h2>${esc(title)}</h2>${sub ? `<div class="section-sub">${esc(sub)}</div>` : ''}</div>${more ? `<a href="#/${more}" class="see-all">See all</a>` : ''}</div><div class="shelf">${inner}</div></section>`;
+  return `<section class="section"><div class="section-head"><div><h2>${esc(title)}</h2>${sub ? `<div class="section-sub">${esc(sub)}</div>` : ''}</div><div class="shelf-tools">${more ? `<a href="#/${more}" class="see-all">See all</a>` : ''}<button class="icon-btn small shelf-nav" data-action="shelf-prev" aria-label="Scroll back"><svg><use href="#i-back"/></svg></button><button class="icon-btn small shelf-nav" data-action="shelf-next" aria-label="Scroll forward"><svg class="flip"><use href="#i-back"/></svg></button></div></div><div class="shelf">${inner}</div></section>`;
 }
 function emptyLib() {
   return `<div class="empty-state"><div class="empty-mark"><svg><use href="#i-note"/></svg></div>
@@ -614,7 +615,10 @@ VIEWS.home = () => {
   const hero = cur || recent[0] || [...all].sort(byAdded)[0];
   const resumeAt = cur && engine.el.currentTime > 5 && engine.el.paused ? engine.el.currentTime : 0;
   const heroKey = listKey([hero.id], 'Home');
-  const ctxTiles = S.ctxs.map(c => ctxTile(c)).filter(Boolean).slice(0, 6);
+  // recent places first, then fill with mixes and your own lists so the grid never looks empty
+  const seenR = new Set(); const pad = [...dailyMixes().slice(0, 4).map((m, i) => ({ route: '#/daily/' + (i + 1), title: 'Daily Mix' })), { route: '#/liked', title: 'Liked Songs' }, ...Object.entries(SMART).filter(([k]) => k !== 'recently-played').map(([k, d]) => ({ route: '#/smart/' + k, title: d.title }))];
+  let ctxTiles = [...S.ctxs, ...pad].filter(c => { const r = hrefFor(c); if (seenR.has(r)) return false; seenR.add(r); return true; }).map(c => ctxTile(c)).filter(Boolean).slice(0, 6);
+  if (ctxTiles.length % 2) ctxTiles = ctxTiles.slice(0, -1);
   const dailies = dailyMixes();
   const mixes = [...groups('mix')].filter(([k, ts]) => !(dailies.length && k === 'Music' && ts.length > all.length * .5)).sort((a, b) => b[1].length - a[1].length);
   const because = becauseYouPlayed();
@@ -2088,6 +2092,7 @@ document.addEventListener('click', async e => {
     if (HAPTIC.has(a.dataset.action)) haptic();
     switch (a.dataset.action) {
       case 'noop': return;
+      case 'shelf-prev': case 'shelf-next': { const sh = a.closest('.section')?.querySelector('.shelf'); if (sh) sh.scrollBy({ left: (a.dataset.action === 'shelf-next' ? 1 : -1) * sh.clientWidth * .85, behavior: 'smooth' }); return; }
       case 'airplay': try { engine.el.webkitShowPlaybackTargetPicker(); } catch { toast('AirPlay isn’t available here'); } return;
       case 'toggle': return toggle();
       case 'next': return next();
