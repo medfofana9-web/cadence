@@ -1864,7 +1864,9 @@ $('#p-vol').addEventListener('input', e => { const v = e.target.value / 100; eng
 function updateMediaSession(t) {
   if (!('mediaSession' in navigator)) return;
   try { navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist, album: t.album || t.category || '', artwork: [{ src: artOf(t, 'full'), sizes: '1200x1200' }] }); } catch {}
-  const h = { play: () => engine.el.play(), pause: () => engine.el.pause(), previoustrack: prev, nexttrack: () => next(), seekto: e => { engine.el.currentTime = e.seekTime; }, seekbackward: e => { engine.el.currentTime -= e.seekOffset || 10; }, seekforward: e => { engine.el.currentTime += e.seekOffset || 10; } };
+  // a music app: the lock screen and Control Center show previous / next song. Registering the 10-second skips
+  // makes iPhone show those instead, so they are left off.
+  const h = { play: () => engine.el.play(), pause: () => engine.el.pause(), previoustrack: prev, nexttrack: () => next(), seekto: e => { engine.el.currentTime = e.seekTime; }, seekbackward: null, seekforward: null };
   for (const [k, f] of Object.entries(h)) { try { navigator.mediaSession.setActionHandler(k, f); } catch {} }
 }
 
