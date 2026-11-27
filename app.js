@@ -4348,7 +4348,7 @@ VIEWS.offline = () => {
   const pick = (k, vals, fmtV) => `<div class="seg small">${vals.map(v => `<button class="${o[k] === v ? 'on' : ''}" data-action="off-pick" data-id="${k}" data-v="${v}">${fmtV(v)}</button>`).join('')}</div>`;
   const on = S.settings.autoOffline !== false;
   return `${back()}<div class="page-head"><div><div class="eyebrow">Settings</div><h1>Offline</h1><div class="lede">Choose what stays on this phone, so it plays with no signal.</div></div></div>
-    <section class="off-store"><div class="off-top"><b>${u ? bytes(used) : '…'}</b><span class="muted">${o.limitGB ? `of ${o.limitGB} GB` : u ? `${count(u.songs)} of ${count(u.libN)} on this phone` : ''}</span></div>
+    <section class="off-store"><div class="off-top"><b>${u ? bytes(used) : '…'}</b><span class="muted">${o.limitGB ? `of ${o.limitGB} GB` : u ? `${u.songs.toLocaleString()} of ${count(u.libN)} on this phone` : ''}</span></div>
       <div class="off-bar"><i class="m" style="width:${u ? pct(u.music) : 0}%"></i><i class="p" style="width:${u ? pct(u.podcasts) : 0}%"></i><i class="q" style="width:${u ? pct(u.quran) : 0}%"></i></div>
       <div class="off-key"><span><i class="m"></i>Music ${u ? `· ${count(u.songs)}` : ''}</span><span><i class="p"></i>Podcasts ${u ? `· ${u.eps}` : ''}</span><span><i class="q"></i>Quran</span></div></section>
     <div class="settings-group">${sw('autoOffline', 'Keep music on this phone', 'Saves what you choose below and keeps it up to date')}</div>
