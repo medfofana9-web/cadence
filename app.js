@@ -211,6 +211,7 @@ async function boot() {
   S.quranSaved = await kv.get('quranSaved', []);
   CHECK.lists = await kv.get('playlistChecks', []);
   S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
+  S.cleanNoArt = await kv.get('cleanNoArt', []); S.qOff = await kv.get('qOff', {});
   for (const [id, p] of pls) S.playlists.set(id, p);
   for (const [id, b] of arts) (id.startsWith('pl:') ? S.plCovers : S.art).set(id.replace(/^pl:/, ''), URL.createObjectURL(b));
   for (const [id, b] of thumbs) S.thumbs.set(id, URL.createObjectURL(b));
@@ -249,6 +250,7 @@ async function boot() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (IN_APP) { renewReminder(); siriHooks(); }
   setTimeout(() => { try { checkWants(); } catch {} }, 6000);
+  setTimeout(() => growPlaylists().catch(e => console.warn('grow', e)), 60000); setInterval(() => growPlaylists().catch(() => {}), 20 * 60 * 1000);
 }
 /** "Hey Siri, play Fof Flow" and the home screen widget hand their request to the app here. */
 function siriRun(a) {
@@ -430,8 +432,10 @@ async function applyUpdate() {
    ===================================================================== */
 function go(r) { S.freshNav = true; location.hash = '#/' + r; }
 $('#main').addEventListener('scroll', () => { S.scroll[location.hash] = $('#main').scrollTop; mountVisible(); }, { passive: true });
-function route() {
+function route(ev) {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, '')) || 'home';
+  if (h === 'drive' && ev?.oldURL && !ev.oldURL.includes('#/drive')) S.driveFrom = decodeURIComponent(ev.oldURL.split('#/')[1] || 'home');
+  document.documentElement.classList.toggle('drive-on', h === 'drive');
   const i = h.indexOf('/');
   S.route = i < 0 ? h : h.slice(0, i);
   S.param = i < 0 ? '' : h.slice(i + 1);
@@ -476,7 +480,8 @@ function render() {
 function afterRender() {
   if (S.route === 'search') { const i = $('#search-input'); if (i && document.activeElement !== i && !('ontouchstart' in window)) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
   if (S.route === 'search') refreshDiscover();
-  if (S.route === 'import') { if ($('#drop')) bindImport(); bindDiscover(); }
+  if (S.route === 'import' && $('#drop')) bindImport();
+  if (S.route === 'new') bindDiscover();
   if (S.route === 'podcasts') bindPodSearch();
   if (S.route === 'quran' || S.route === 'reciters') bindQuran();
   paintTime();
@@ -817,7 +822,7 @@ VIEWS.home = () => {
   const moods = Object.entries(MOODS).map(([k, m]) => [k, m, moodList(k).length]).filter(x => x[2]);
   return `
   <div class="page-head home-head"><div><h1>Home</h1></div>
-    <button class="btn flow-btn" data-action="flow"><svg><use href="#i-flow"/></svg>Fof Flow</button></div>
+    <div class="home-acts"><a class="btn drive-btn" href="#/drive" aria-label="Drive mode"><svg><use href="#i-car"/></svg><span>Drive</span></a><button class="btn flow-btn" data-action="flow"><svg><use href="#i-flow"/></svg>Fof Flow</button></div></div>
   <section class="hero ${cur ? 'live' : ''}" style="${richAmbient(hero.colors)}">
     <div class="hero-art" data-play-list="${heroKey}" data-i="0"><img src="${artOf(hero, 'full')}" alt=""></div>
     <div class="hero-info"><div class="eyebrow">${cur ? '<span class="when-playing">Now Playing</span><span class="when-paused">Paused</span>' : recent.length ? 'Recently Played' : 'Recently Added'}</div>
@@ -1067,6 +1072,7 @@ VIEWS.playlist = () => {
   return `${collHead({ img: null, custom: S.plCovers.get(p.id), tracks: p.tracks.map(id => T(id)).filter(Boolean), eyebrow: 'Playlist', title: p.name, ctxRoute: 'playlist/' + p.id,
       meta: p.tracks.length ? `${count(p.tracks.length)} · ${total(p.tracks.map(id => T(id)).filter(Boolean))}` : 'Add songs from any song’s ••• menu, or the Add songs button.',
       actions: `${dlButton(p.tracks.map(id => T(id)).filter(Boolean))}<button class="btn ghost" data-action="pl-add-songs" data-pl="${p.id}"><svg><use href="#i-plus"/></svg>Add songs</button><button class="icon-btn" data-action="playlist-menu" data-pl="${p.id}" aria-label="Playlist options"><svg><use href="#i-more"/></svg></button>` })}
+    ${growBox(p)}
     ${p.tracks.length ? `<div class="toolbar"><div class="seg">${[['custom', 'Custom order'], ['title', 'Title'], ['artist', 'Artist'], ['added', 'Recently added']].map(([k, l]) => `<button class="${k === sort ? 'on' : ''}" data-action="pl-sort" data-pl="${p.id}" data-sort="${k}">${l}</button>`).join('')}</div>
       <div class="filter-box"><svg><use href="#i-search"/></svg><input class="input" id="pl-filter" data-pl="${p.id}" placeholder="Find in playlist" value="${esc(f)}"></div></div>
       ${trackRows(ts, { context: p.name, key: 'pl:' + p.id, sortable: canDrag ? 'pl:' + p.id : '', cols: ['album', 'added'] })}` : ''}
@@ -1076,7 +1082,7 @@ VIEWS.playlist = () => {
 VIEWS.smart = () => {
   const d = SMART[S.param]; if (!d) return `<div class="empty-state small"><h2>Not found</h2></div>`;
   const ts = smartList(S.param);
-  return `${back()}${collHead({ img: null, tracks: ts, eyebrow: 'Smart playlist · updates itself', title: d.title, ctxRoute: 'smart/' + S.param, meta: `${esc(d.desc)}${ts.length ? ` · ${count(ts.length)}` : ''}`,
+  return `${back()}${collHead({ img: null, tracks: ts, eyebrow: d.moment ? 'Made for you · updates daily' : 'Smart playlist · updates itself', title: d.title, ctxRoute: 'smart/' + S.param, meta: `${esc(d.desc)}${ts.length ? ` · ${count(ts.length)}` : ''}`,
       actions: ts.length ? `${dlButton(ts)}<button class="btn ghost" data-action="save-list" data-name="${esc(d.title)}" data-list-ids="${ts.map(t => t.id).join(',')}">Save as playlist</button>` : '' })}
     ${ts.length ? trackRows(ts, { context: d.title, cols: ['album', S.param === 'recently-added' ? 'added' : S.param === 'never-played' ? 'added' : 'plays', 'last'] }) : '<div class="empty-state small"><p>Nothing here yet. This fills in as you listen.</p></div>'}`;
 };
@@ -1092,9 +1098,10 @@ VIEWS.mood = () => {
 VIEWS.library = () => {
   const pls = [...S.playlists.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   const row = (href, icon, label, n) => `<a class="lib-row" href="#/${href}"><svg><use href="#i-${icon}"/></svg><span>${label}</span><span class="muted">${n ?? ''}</span><svg class="chev"><use href="#i-back"/></svg></a>`;
-  const smarts = Object.entries(SMART).map(([k, d]) => [k, d, d.get(visible())]).filter(x => x[2].length);
+  const smarts = Object.entries(SMART).filter(([, d]) => !d.moment).map(([k, d]) => [k, d, d.get(visible())]).filter(x => x[2].length);
   return `<div class="page-head"><h1>Library</h1><a class="icon-btn" href="#/settings" aria-label="Settings"><svg><use href="#i-gear"/></svg></a></div>
-    <div class="lib-rows">${row('songs', 'note', 'Songs', visible().length)}${row('artists', 'mic', 'Artists', groups('creditedArtist').size)}${row('albums', 'album', 'Albums', groups('album').size)}${row('liked', 'heart', 'Liked Songs', visible().filter(t => t.liked).length)}${S.log.length ? row('replay', 'spark', 'Replay ' + new Date().getFullYear(), '') + row('insights', 'chart', 'Your listening', '') : ''}${row('import', 'upload', 'Add music', '')}${reviewList().length ? row('review', 'check', 'Check these', reviewList().length) : ''}</div>
+    <div class="lib-rows">${row('songs', 'note', 'Songs', visible().length)}${row('artists', 'mic', 'Artists', groups('creditedArtist').size)}${row('albums', 'album', 'Albums', groups('album').size)}${row('liked', 'heart', 'Liked Songs', visible().filter(t => t.liked).length)}${S.log.length ? row('replay', 'spark', 'Replay ' + new Date().getFullYear(), '') + row('insights', 'chart', 'Your listening', '') : ''}${row('import', 'upload', 'Add music', '')}${row('cleanup', 'check', 'Clean Up', cleanupCount() || '')}${reviewList().length ? row('review', 'check', 'Check these', reviewList().length) : ''}</div>
+    ${momentShelf()}
     <section class="section"><div class="section-head"><h2>Playlists</h2><div class="row-actions"><a class="see-all" data-action="pick-playlists">Import from Apple Music</a><a class="see-all" data-action="new-playlist">New playlist</a></div></div>
     ${pls.length ? `<div class="grid">${pls.map(p => collCard({ href: 'playlist/' + p.id, title: p.name, sub: count(p.tracks.length), tracks: p.tracks.map(id => T(id)).filter(Boolean), img: S.plCovers.get(p.id) })).join('')}</div>` : '<p class="muted">No playlists yet.</p>'}</section>
     ${smarts.length ? `<section class="section"><div class="section-head"><h2>Smart playlists</h2></div><div class="grid">${smarts.map(([k, d, ts]) => collCard({ href: 'smart/' + k, title: d.title, sub: count(ts.length), tracks: ts, badge: '<svg><use href="#i-spark"/></svg>' })).join('')}</div></section>` : ''}`;
@@ -1253,7 +1260,7 @@ const IMP = { jobs: [], cancel: false, running: false, found: 0, added: 0, skipp
 VIEWS.import = () => {
   if (S.param === 'check') return checkPlaylistView();
   if (S.param === 'want') return wantView();
-  if (S.param !== 'files' && !IMP.jobs.length) return discoverView();
+  if (!S.param && !IMP.jobs.length && wants().some(w => !w.arrived)) return wantView();
   const signedOut = cloud.cloudConfigured() && !S.user;
   const st = IMP;
   const failed = st.jobs.filter(j => j.state === 'error');
@@ -1694,7 +1701,7 @@ VIEWS.settings = () => {
       ${sw('autoFix', 'Fix names and artwork on import', 'Recognizes each song by its sound, then checks Apple Music and Deezer for the real name and album artwork. Songs with complete tags keep their own names.')}
       <div class="set-row"><div class="lbl"><b>Fix all songs again</b><span>Re-checks names and artwork for songs you haven’t edited yourself</span></div><button class="btn" data-action="refix-all">Fix all</button></div>
       ${CAN_WATCH ? `<div class="set-row"><div class="lbl"><b>Auto-import folder</b><span>${S.folder ? `Watching “${esc(S.folder.name)}”` : 'Not connected. New songs saved to a folder you pick are added automatically.'}</span></div>${S.folder ? '<button class="btn ghost" data-action="disconnect-folder">Stop watching</button>' : '<button class="btn" data-action="connect-folder">Connect folder</button>'}</div>` : ''}
-      ${IN_APP || IS_IOS ? sw('autoOffline', 'Keep favorites on this phone', 'Liked songs and your most played are saved here, so they play with no signal') : ''}
+      ${IN_APP || IS_IOS ? `<a class="set-row" href="#/offline"><div class="lbl"><b>Offline</b><span>${S.settings.autoOffline === false ? 'Off' : 'Choose what stays on this phone'}</span></div>${icon('back', 'chev')}</a>` : ''}
       ${sw('askUnsure', 'Ask me about songs it can’t identify', 'Off: songs that aren’t found by sound or in Apple Music or Deezer keep their cleaned-up name and a designed cover. On: they’re listed in Check these.')}
       ${(() => { const n = reviewList(true).length; return `<div class="set-row"><div class="lbl"><b>Songs to name</b><span>${n ? `${count(n)} not found in any catalog` : 'Every song is named'}</span></div>${n ? '<a class="btn" href="#/review">Fix</a>' : ''}</div>`; })()}
       ${S.channels.length ? `<div class="set-row"><div class="lbl"><b>Channels, not artists</b><span>${S.channels.map(esc).join(', ')}</span></div><button class="btn ghost" data-action="clear-channels">Reset</button></div>` : ''}
@@ -1809,6 +1816,7 @@ async function next(auto = false) {
   if (auto && P.repeat === 'one') { engine.el.currentTime = 0; engine.el.play(); return; }
   const n = peekNext();
   if (!n) { if (auto) { engine.el.pause(); engine.el.currentTime = 0; toast('That’s the end of the queue'); } return; }
+  if (!auto) { try { noteSkip(); } catch (e) { console.warn('skip', e); } }
   P.idx = n.idx;
   const ok = await loadTrack(n.id);
   if (!ok && auto) next(true);
@@ -1879,6 +1887,7 @@ function paintNow(t) {
   setNowBg(t.colors);
   setBackdrop(t.colors);
   $('#player').style.cssText = ambient(t.colors);
+  if (S.route === 'drive') paintDrive(t);
   markPlaying();
 }
 let bgLayer = 0, bdLayer = 0;
@@ -2390,7 +2399,7 @@ function addSongsSheet(pid) {
   const obs = new MutationObserver(() => { if (!$('#sheet-root').children.length) { obs.disconnect(); if (S.route === 'playlist') render(); } });
   obs.observe($('#sheet-root'), { childList: true });
 }
-async function removeFromPlaylist(pid, id) { const p = S.playlists.get(pid); const i = p.tracks.indexOf(id); p.tracks = p.tracks.filter(x => x !== id); await savePlaylist(p); render(); toast('Removed from playlist', ['Undo', async () => { p.tracks.splice(i, 0, id); await savePlaylist(p); render(); }]); }
+async function removeFromPlaylist(pid, id) { const p = S.playlists.get(pid); const i = p.tracks.indexOf(id); p.tracks = p.tracks.filter(x => x !== id); p.removed = [...new Set([...(p.removed || []), id])]; await savePlaylist(p); render(); toast('Removed from playlist', ['Undo', async () => { p.tracks.splice(i, 0, id); p.removed = (p.removed || []).filter(x => x !== id); await savePlaylist(p); render(); }]); }
 function newPlaylist(ids = []) {
   sheet(`<h2>New playlist</h2><input class="input full" id="pl-name" placeholder="Playlist name"><div class="actions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="pl-create">Create</button></div>`, el => {
     const go_ = async () => { const name = el.querySelector('#pl-name').value.trim(); if (!name) return; const p = { id: uid(), name, tracks: ids, createdAt: Date.now() }; await savePlaylist(p); closeSheet(); go('playlist/' + p.id); };
@@ -2616,19 +2625,32 @@ let uploading = false;
 function autoUpload() { return oneTab('upload', autoUploadNow); }
 /** On the phone: liked songs and your most played are kept on the device, so they play with no signal. */
 function autoOffline() { return oneTab('offline', autoOfflineNow); }
-async function autoOfflineNow() {
+async function autoOfflineNow(manual = false) {
   if (!(IN_APP || IS_IOS) || !S.user || !navigator.onLine || downloading || S.settings.autoOffline === false) return;
-  const all = [...S.tracks.values()].filter(t => t.cloud);
-  const top = all.filter(t => t.plays > 0).sort((a, b) => (b.plays || 0) - (a.plays || 0)).slice(0, 60);
-  const want = [...new Set([...all.filter(t => t.liked), ...top])].filter(t => !t.local).slice(0, 25);
-  for (const t of want) {
-    if (!navigator.onLine || current()?.id === t.id) continue;
-    try {
-      const u = await cloud.fileUrl('audio/' + t.id, t.store === 'r2' || cloud.r2On()); if (!u) continue;
-      const b = await (await fetch(u)).blob(); if (!b.size) continue;
-      await db.put('audio', t.id, b); t.local = true; t.downloaded = true; t.autoSaved = true; await saveTrack(t, { sync: false });
-    } catch (e) { if (isQuotaError(e)) break; }
-  }
+  const o = offSet();
+  if (o.wifiOnly && !onWifi()) { if (manual) toast('Waiting for Wi-Fi. Turn off “Only on Wi-Fi” to save now.'); return; }
+  downloading = true;
+  try {
+    const all = [...S.tracks.values()].filter(t => t.cloud);
+    const top = o.top ? all.filter(t => t.plays > 0).sort((a, b) => (b.plays || 0) - (a.plays || 0)).slice(0, o.top) : [];
+    const upnext = o.upnext ? P.queue.slice(P.idx + 1, P.idx + 11).map(id => T(id)).filter(t => t && t.cloud) : [];
+    const want = [...new Set([...upnext, ...(o.liked ? all.filter(t => t.liked) : []), ...top])].filter(t => !t.local);
+    const cap = o.limitGB * 1e9;
+    let used = [...S.tracks.values()].filter(t => t.local).reduce((x, t) => x + (t.size || (t.duration || 200) * 24000), 0);
+    let n = 0;
+    for (const t of want.slice(0, manual ? 400 : 60)) {
+      if (!navigator.onLine || current()?.id === t.id) continue;
+      const sz = t.size || (t.duration || 200) * 24000; if (used + sz > cap) break;
+      try {
+        const u = await cloud.fileUrl('audio/' + t.id, t.store === 'r2' || cloud.r2On()); if (!u) continue;
+        const b = await (await fetch(u)).blob(); if (!b.size) continue;
+        await db.put('audio', t.id, b); t.local = true; t.downloaded = true; t.autoSaved = true; await saveTrack(t, { sync: false }); used += b.size; n++;
+      } catch (e) { if (isQuotaError(e)) break; }
+    }
+    if (manual) toast(n ? `${count(n)} saved to this phone` : 'Everything you chose is already on this phone');
+  } finally { downloading = false; }
+  if (o.podcasts) await podAutoSave().catch(() => {});
+  await offlineQuran(o).catch(e => console.warn('quran offline', e));
 }
 function autoUploadNow() {
   if (!S.user || !navigator.onLine || uploading || IMP.running) return;
@@ -2684,6 +2706,7 @@ document.addEventListener('click', async e => {
     e.stopPropagation();
     const id = a.dataset.id;
     if (HAPTIC.has(a.dataset.action)) haptic();
+    if (ACT2[a.dataset.action]) return ACT2[a.dataset.action](a, e);
     switch (a.dataset.action) {
       case 'noop': return;
       case 'pod-play': return podPlay(id);
@@ -3109,7 +3132,7 @@ async function podDownload(id) {
 }
 /** The iPhone app keeps the newest episode of every show you follow ready for no-signal listening. */
 async function podAutoSave() {
-  if (!NATIVE || !navigator.onLine) return;
+  if (!NATIVE || !navigator.onLine || offSet().podcasts === false) return;
   for (const s of S.pod.subs) {
     const r = await pods.episodes(s.id).catch(() => null); const ep = r?.episodes?.[0]; if (!ep || S.ext.get(ep.id)?.path || S.pod.prog[ep.id]?.done) continue;
     try { const x = await NATIVE.download({ url: ep.url, name: 'pod-' + ep.id.slice(4) + '.' + ep.fileExt }); saveExt({ ...ep, ...(S.ext.get(ep.id) || {}), path: x.path }); } catch {}
@@ -3255,12 +3278,12 @@ async function qPlay(n, from = 1, { keepPaused = false } = {}) {
   if (r.kind === 'verse') {
     let audio = QR.audio.get(n + r.id), ayahs;
     try { ayahs = await qTextNow(n); if (!audio) { audio = await quran.verseAudio(n, r.id); QR.audio.set(n + r.id, audio); } } catch { return toast('Couldn’t load this surah. Check your connection.'); }
-    const ids = ayahs.map((a, i) => { const id = `qur:${r.id}:${a.g}`; S.ext.set(id, { id, ext: true, kind: 'ayah', surah: n, n: a.n, g: a.g, title: `${s.englishName} · Verse ${a.n}`, artist: r.name, album: 'Quran', category: 'Quran', art, url: audio[i] }); return id; });
+    const ids = ayahs.map((a, i) => { const id = `qur:${r.id}:${a.g}`; S.ext.set(id, { ...keepPath(id), id, ext: true, kind: 'ayah', surah: n, n: a.n, g: a.g, title: `${s.englishName} · Verse ${a.n}`, artist: r.name, album: 'Quran', category: 'Quran', art, url: audio[i] }); return id; });
     saveExt(S.ext.get(ids[0]));
     const ord = P.mem ? memOrder(ids) : null;
     await playList(ord || ids, ord ? 0 : Math.max(0, from - 1), { context: s.englishName, ctxRoute: 'quran/' + n, mode: 'quran' });
   } else {
-    const ids = list.filter(x => x.number >= n && quran.has(r, x.number)).slice(0, 20).map(x => { const id = `qs:${r.id}:${x.number}`; S.ext.set(id, { id, ext: true, kind: 'surahrec', surah: x.number, title: x.englishName, artist: r.name, album: 'Quran', category: 'Quran', art: quran.cover(x.englishName, surahName(x)), url: quran.surahUrl(r, x.number), read: r.read }); return id; });
+    const ids = list.filter(x => x.number >= n && quran.has(r, x.number)).slice(0, 20).map(x => { const id = `qs:${r.id}:${x.number}`; S.ext.set(id, { ...keepPath(id), id, ext: true, kind: 'surahrec', surah: x.number, title: x.englishName, artist: r.name, album: 'Quran', category: 'Quran', art: quran.cover(x.englishName, surahName(x)), url: quran.surahUrl(r, x.number), read: r.read }); return id; });
     saveExt(S.ext.get(ids[0]));
     const tm = await qTimingNow(r, n);
     QR.curV = from;
@@ -3769,7 +3792,7 @@ async function checkExport(copy) {
   const link = document.createElement('a'); link.href = url; link.download = 'FOF-Music-Missing.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const addTabs = on => `<div class="seg q-seg add-tabs"><a class="${on === 'discover' ? 'on' : ''}" href="#/import">Discover</a><a class="${on === 'want' ? 'on' : ''}" href="#/import/want">${wantTabLabel()}</a><a class="${on === 'check' ? 'on' : ''}" href="#/import/check">Playlist Check</a><a class="${on === 'files' ? 'on' : ''}" href="#/import/files">Add files</a></div>`;
+const addTabs = on => `<div class="seg q-seg add-tabs"><a class="${on === 'want' ? 'on' : ''}" href="#/import/want">${wantTabLabel()}</a><a class="${on === 'check' ? 'on' : ''}" href="#/import/check">Playlist Check</a><a class="${on === 'files' ? 'on' : ''}" href="#/import/files">Add files</a></div><a class="add-new-link" href="#/new">${icon('new')}<span>Find new songs in <b>New</b></span>${icon('back', 'chev')}</a>`;
 function ownedKeys() {
   if (DC.owned && DC.ownedAt === S.tracks.size) return DC.owned;
   const m = new Set();
@@ -3820,22 +3843,55 @@ async function loadSuggestions() {
   if (topG) { const gid = DZ_GENRES.find(([re]) => re.test(topG))[1]; const ch = ((await dz(`chart/${gid}/tracks?limit=40`))?.data || []).map(dzTrack).filter(keep).slice(0, 12); if (ch.length) out.genre = { name: topG, items: ch }; }
   return out;
 }
-function discoverView() {
-  if (!DC.sugg && !DC.cacheTried) { DC.cacheTried = true; kv.get('discover', null).then(c => { if (c && Date.now() - c.at < 12 * 36e5 && !DC.sugg) { DC.sugg = c.v; if (S.route === 'import' && !DC.q) render(); } }); }
-  if (!DC.fresh && !DC.loading && navigator.onLine) { DC.loading = true; loadSuggestions().then(x => { DC.sugg = x; DC.fresh = true; kv.set('discover', { at: Date.now(), v: x }); }).catch(e => { console.warn('discover', e); DC.sugg = { because: [], loved: [], genre: null }; }).finally(() => { DC.loading = false; if (S.route === 'import' && !DC.q) render(); }); }
-  const sg = DC.sugg;
-  if (!DC.rel && !DC.relLoading && navigator.onLine) { DC.relLoading = true; kv.get('releases', null).then(c => { if (c && !DC.rel) { DC.rel = c.v; if (S.route === 'import' && !S.param && !DC.q) render(); } }); newReleases().then(x => { DC.rel = x; kv.set('releases', { at: Date.now(), v: x }); if (S.route === 'import' && !S.param && !DC.q) render(); }).catch(() => {}); }
-  const relShelf = DC.rel?.length ? `<section class="section"><div class="section-head"><h2>New from your artists</h2></div><div class="shelf dc-shelf">${DC.rel.map(releaseCard).join('')}</div></section>` : '';
-  const body = DC.q ? dcResults() : !sg ? `<div class="pod-loading">${navigator.onLine ? 'Finding songs for you…' : 'Connect to the internet to discover songs.'}</div>` : `
-    ${relShelf}${sg.because.map(b => `<section class="section"><div class="section-head"><h2>Because you play ${esc(b.name)}</h2></div><div class="shelf dc-shelf">${b.items.map(dcCard).join('')}</div></section>`).join('')}
-    ${sg.loved.length ? `<section class="section"><div class="section-head"><h2>More from artists you love</h2></div><div class="dc-list">${sg.loved.slice(0, 12).map(dcRow).join('')}</div></section>` : ''}
-    ${sg.genre ? `<section class="section"><div class="section-head"><h2>Popular in ${esc(sg.genre.name)}</h2></div><div class="shelf dc-shelf">${sg.genre.items.map(dcCard).join('')}</div></section>` : ''}
-    ${!sg.because.length && !sg.loved.length && !sg.genre ? '<p class="muted pod-none">Play a few songs and suggestions will show up here.</p>' : ''}`;
-  return `<div class="page-head"><div><h1>Add Music</h1></div></div>${addTabs('discover')}
-    <label class="search-box dc-search">${icon('search')}<input id="dc-q" class="input" type="search" placeholder="Search any song or artist" value="${esc(DC.q)}" autocomplete="off" enterkeyhint="search"></label>
-    ${DC.q ? `<div class="seg q-seg">${[['track', 'Songs'], ['artist', 'Artists'], ['album', 'Albums']].map(([k, l]) => `<button class="${DC.type === k ? 'on' : ''}" data-action="dc-type" data-id="${k}">${l}</button>`).join('')}</div>` : ''}
-    <div id="dc-body">${body}</div>`;
+/* ---------- the New tab: what's new for you, in one place ---------- */
+function loadNew() {
+  const here = () => S.route === 'new' && !DC.q;
+  if (!DC.sugg && !DC.cacheTried) { DC.cacheTried = true; kv.get('discover', null).then(c => { if (c && Date.now() - c.at < 12 * 36e5 && !DC.sugg) { DC.sugg = c.v; if (here()) render(); } }); }
+  if (!DC.fresh && !DC.loading && navigator.onLine) { DC.loading = true; loadSuggestions().then(x => { DC.sugg = x; DC.fresh = true; kv.set('discover', { at: Date.now(), v: x }); }).catch(e => { console.warn('discover', e); DC.sugg = DC.sugg || { because: [], loved: [], genre: null }; }).finally(() => { DC.loading = false; if (here()) render(); }); }
+  if (!DC.rel && !DC.relLoading && navigator.onLine) {
+    DC.relLoading = true;
+    kv.get('releases', null).then(c => { if (c && !DC.rel) { DC.rel = c.v; if (here()) render(); } });
+    kv.get('newsongs', null).then(c => { if (c && !DC.newSongs) { DC.newSongs = c.v; if (here()) render(); } });
+    newReleases().then(async x => {
+      DC.rel = x; kv.set('releases', { at: Date.now(), v: x });
+      // the strongest song from each new release
+      const albums = await Promise.all(x.slice(0, 12).map(a => dz('album/' + a.id).catch(() => null)));
+      DC.newSongs = albums.filter(Boolean).flatMap(al => { const ts = (al.tracks?.data || []).filter(r => r.preview); const best = ts.slice().sort((p, q) => (q.rank || 0) - (p.rank || 0))[0]; return best ? [{ ...dzTrack(best), artist: best.artist?.name || al.artist?.name || '', album: al.title, art: al.cover_medium, date: al.release_date }] : []; });
+      kv.set('newsongs', { at: Date.now(), v: DC.newSongs });
+      if (here()) render();
+    }).catch(() => {});
+  }
 }
+const relKind = a => a.type === 'single' ? 'NEW SINGLE' : a.type === 'ep' ? 'NEW EP' : 'NEW ALBUM';
+function heroRelease(a) {
+  const ts = groups('creditedArtist').get(a.artist) || [], plays = ts.reduce((n, t) => n + (t.plays || 0), 0);
+  const big = (a.art || '').replace('/250x250-', '/1000x1000-');
+  return `<a class="nw-hero" href="#/dz-album/${a.id}"><div class="nw-eyebrow">${relKind(a)} · ${esc(relDate(a.date))}</div><div class="nw-title ellipsis">${esc(a.title)}</div><div class="nw-sub ellipsis">${esc(a.artist)}</div>
+    <div class="nw-img"><img loading="lazy" src="${esc(big)}" alt=""><div class="nw-note">${plays ? `You’ve played ${esc(a.artist)} ${plays} time${plays === 1 ? '' : 's'}.` : `From ${esc(a.artist)}, an artist in your library.`}</div></div></a>`;
+}
+function updatedPlaylists() {
+  const wk = Date.now() - 7 * DAY, out = [];
+  for (const p of S.playlists.values()) { const n = (p.added || []).filter(x => !x.removed && x.at > wk && p.tracks.includes(x.id)).length; if (n) out.push({ href: 'playlist/' + p.id, title: p.name, sub: `${n} new this week`, tracks: p.tracks.map(id => T(id)).filter(Boolean), img: S.plCovers.get(p.id) }); }
+  for (const k of ['on-repeat', 'recently-loved', 'drive', 'workout']) { const d = SMART[k]; const ts = d?.get(visible()) || []; if (ts.length >= 5) out.push({ href: 'smart/' + k, title: d.title, sub: 'Updated today', tracks: ts }); }
+  return out;
+}
+VIEWS.new = () => {
+  loadNew();
+  const sg = DC.sugg;
+  const search = `<label class="search-box dc-search">${icon('search')}<input id="dc-q" class="input" type="search" placeholder="Search any song, artist or album" value="${esc(DC.q)}" autocomplete="off" enterkeyhint="search"></label>`;
+  if (DC.q) return `<div class="page-head"><h1>New</h1></div>${search}<div class="seg q-seg">${[['track', 'Songs'], ['artist', 'Artists'], ['album', 'Albums']].map(([k, l]) => `<button class="${DC.type === k ? 'on' : ''}" data-action="dc-type" data-id="${k}">${l}</button>`).join('')}</div><div id="dc-body">${dcResults()}</div>`;
+  const songs = (DC.newSongs || []).filter(r => r.preview);
+  const upd = updatedPlaylists();
+  const loading = !sg && !DC.rel;
+  return `<div class="page-head"><h1>New</h1></div>${search}
+    ${DC.rel?.length ? `<div class="nw-heroes">${DC.rel.slice(0, 8).map(heroRelease).join('')}</div>` : ''}
+    ${songs.length ? `<section class="section"><div class="section-head"><h2>Best New Songs for You</h2></div><div class="nw-grid">${songs.map(dcRow).join('')}</div></section>` : ''}
+    ${upd.length ? `<section class="section"><div class="section-head"><h2>Updated Playlists</h2></div><div class="shelf">${upd.map(collCard).join('')}</div></section>` : ''}
+    ${loading ? `<div class="pod-loading">${navigator.onLine ? 'Finding what’s new for you…' : 'Connect to the internet to see what’s new.'}</div>` : ''}
+    ${sg ? `${sg.because.map(b => `<section class="section"><div class="section-head"><h2>Because you play ${esc(b.name)}</h2></div><div class="shelf dc-shelf">${b.items.map(dcCard).join('')}</div></section>`).join('')}
+      ${sg.loved.length ? `<section class="section"><div class="section-head"><h2>More from artists you love</h2></div><div class="nw-grid">${sg.loved.slice(0, 12).map(dcRow).join('')}</div></section>` : ''}
+      ${sg.genre ? `<section class="section"><div class="section-head"><h2>Popular in ${esc(sg.genre.name)}</h2></div><div class="shelf dc-shelf">${sg.genre.items.map(dcCard).join('')}</div></section>` : ''}` : ''}`;
+};
 function dcResults() {
   const r = DC.results;
   if (!r) return '<div class="pod-loading">Searching…</div>';
@@ -3994,3 +4050,385 @@ async function wantFromText(text) {
   if (!isWanted(r.title, r.artist)) toggleWant(r);
   go('import/want');
 }
+
+/* =====================================================================
+   Made for your moments: playlists that build themselves from how you listen
+   ===================================================================== */
+const isSong = t => t && !t.ext && (t.category || 'Music') === 'Music';
+let rcMemo = { k: '', v: new Map() };
+function recentPlays() {
+  const k = S.log.length + ':' + Math.floor(Date.now() / DAY);
+  if (rcMemo.k !== k) rcMemo = { k, v: playCounts(e => Date.now() - e.at < 30 * DAY) };
+  return rcMemo.v;
+}
+/** a small, steady wobble so moments feel fresh each day without changing on every redraw */
+const dayWobble = id => { let h = Math.floor(Date.now() / DAY); for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0; return (Math.abs(h) % 100) / 100; };
+function favRank(ts, n, extra = () => 0) {
+  const rc = recentPlays();
+  return ts.map(t => [t, (rc.get(t.id) || 0) * 3 + Math.min(t.plays || 0, 40) + (t.liked ? 8 : 0) + extra(t) + dayWobble(t.id) * 4]).sort((a, b) => b[1] - a[1]).slice(0, n).map(x => x[0]);
+}
+const G_ENERGY = /hip-?hop|rap|drill|trap|dance|edm|house|electro|afro|amapiano|reggaeton|dancehall|grime|gqom|naija|crunk|club|bounce/i;
+const G_HIPHOP = /hip-?hop|rap|drill|trap|grime/i;
+const G_CALM = /classical|instrumental|ambient|piano|soundtrack|lo-?fi|new age|jazz|acoustic|chill/i;
+const G_SUNDAY = /gospel|worship|christian|soul|r&b|jazz|acoustic|neo-?soul|inspirational/i;
+const hourCounts = test => playCounts(e => test(new Date(e.at)));
+const MOMENT = {
+  'workout': { title: 'Workout', c: ['#ff453a', '#ff9f0a'], desc: 'High-energy songs you play the most', get: ts => favRank(ts.filter(t => isSong(t) && ((t.moods || []).some(m => m === 'workout' || m === 'energy') || G_ENERGY.test(t.genre || ''))), 50, t => (t.moods || []).includes('workout') ? 10 : 0) },
+  'drive': { title: 'Drive', c: ['#0a84ff', '#5e5ce6'], desc: 'What you play on the way to work and home, plus your favorites', get: ts => { const c = hourCounts(d => { const h = d.getHours(), w = d.getDay(); return w > 0 && w < 6 && ((h >= 6 && h < 9) || (h >= 15 && h < 19)); }); return favRank(ts.filter(t => isSong(t) && (c.get(t.id) || t.liked || (t.plays || 0) >= 3)), 50, t => (c.get(t.id) || 0) * 4); } },
+  'on-repeat': { title: 'On Repeat', c: ['#bf5af2', '#5e5ce6'], desc: 'What you can’t stop playing this month', get: ts => { const rc = recentPlays(); return ts.filter(t => isSong(t) && (rc.get(t.id) || 0) >= 3).sort((a, b) => rc.get(b.id) - rc.get(a.id) || (b.lastPlayed || 0) - (a.lastPlayed || 0)).slice(0, 40); } },
+  'afrobeats': { title: 'Afrobeats', c: ['#ff9f0a', '#30a14e'], desc: 'Your Afrobeats, Amapiano and African favorites', get: ts => favRank(ts.filter(t => isSong(t) && MOODS.afrobeats.test(t)), 60) },
+  'hip-hop-heat': { title: 'Hip-Hop Heat', c: ['#ff2d55', '#7a0c24'], desc: 'The rap you play the most right now', get: ts => favRank(ts.filter(t => isSong(t) && G_HIPHOP.test(t.genre || '')), 50, t => (recentPlays().get(t.id) || 0) * 2) },
+  'late-night': { ...SMART['late-night'], c: ['#2c2c6c', '#7d3c98'], get: ts => { const c = playCounts(isNight); return favRank(ts.filter(t => isSong(t) && c.get(t.id)), 50, t => c.get(t.id) * 4); } },
+  'focus': { title: 'Focus', c: ['#30b0c7', '#1f5f73'], desc: 'Calm, steady songs for getting work done', get: ts => favRank(ts.filter(t => isSong(t) && ((t.moods || []).some(m => m === 'focus' || m === 'chill') || G_CALM.test(t.genre || ''))), 50) },
+  'old-school': { title: 'Old School', c: ['#b08d57', '#5b4636'], desc: 'Songs from 15+ years ago that you still love', get: ts => favRank(ts.filter(t => isSong(t) && +t.year && +t.year <= new Date().getFullYear() - 15), 60) },
+  'sunday': { title: 'Sunday Morning', c: ['#ffcc00', '#ff8a00'], desc: 'What you play on Sunday mornings, plus soul and gospel', get: ts => { const c = hourCounts(d => d.getDay() === 0 && d.getHours() >= 7 && d.getHours() < 14); return favRank(ts.filter(t => isSong(t) && (c.get(t.id) || G_SUNDAY.test(t.genre || ''))), 50, t => (c.get(t.id) || 0) * 4); } },
+};
+delete SMART['late-night'];
+for (const [k, m] of Object.entries(MOMENT)) SMART[k] = { ...m, moment: true };
+SMART['recently-loved'].get = ts => ts.filter(t => t.liked && Date.now() - (t.likedAt || 0) < 30 * DAY).sort((a, b) => (b.likedAt || 0) - (a.likedAt || 0));
+function momentTile(k) {
+  const d = SMART[k], ts = d.get(visible()); if (ts.length < 8) return '';
+  const key = listKey(ts.map(t => t.id), d.title);
+  const arts = [...new Set(ts.map(t => artOf(t)).filter(a => a !== PLACEHOLDER))].slice(0, 3);
+  return `<div class="card moment" data-href="smart/${k}"><div class="cover m-tile" style="--m1:${d.c[0]};--m2:${d.c[1]}">
+    <div class="m-art">${arts.map(a => `<img loading="lazy" decoding="async" src="${a}" alt="">`).join('')}</div>
+    <div class="m-name">${esc(d.title)}</div>
+    <button class="hover-play" data-play-list="${key}" data-i="0" data-ctx-route="smart/${k}" aria-label="Play"><svg><use href="#i-play"/></svg></button></div>
+    <div class="t ellipsis">${esc(d.title)}</div><div class="s ellipsis">${count(ts.length)} · updates daily</div></div>`;
+}
+const MOMENT_ORDER = () => { const h = new Date().getHours(), sun = new Date().getDay() === 0; const first = sun && h < 14 ? ['sunday'] : h >= 21 || h < 4 ? ['late-night'] : (h >= 6 && h < 9) || (h >= 15 && h < 19) ? ['drive'] : h < 17 ? ['focus'] : ['workout']; return [...new Set([...first, 'on-repeat', 'drive', 'workout', 'afrobeats', 'hip-hop-heat', 'late-night', 'focus', 'old-school', 'sunday'])]; };
+function momentShelf() {
+  const tiles = MOMENT_ORDER().map(momentTile).filter(Boolean);
+  const loved = smartList('recently-loved');
+  if (loved.length >= 3) tiles.splice(1, 0, collCard({ href: 'smart/recently-loved', title: 'Recently Loved', sub: count(loved.length), tracks: loved, badge: '<svg><use href="#i-heart"/></svg>' }));
+  return tiles.length ? `<section class="section"><div class="section-head"><div><h2>Made for your moments</h2><div class="section-sub">Built from what you play and when</div></div></div><div class="shelf">${tiles.join('')}</div></section>` : '';
+}
+
+/* =====================================================================
+   Playlists that grow: songs you love that fit a playlist are added to it;
+   songs you keep skipping in it leave
+   ===================================================================== */
+function plProfile(p) {
+  const ts = p.tracks.map(id => T(id)).filter(isSong), artists = new Map(), genres = new Map();
+  for (const t of ts) { const a = fold(mainArtist(t.artist)); artists.set(a, (artists.get(a) || 0) + 1); if (t.genre) genres.set(t.genre, (genres.get(t.genre) || 0) + 1); }
+  return { n: ts.length, artists, genres, withGenre: [...genres.values()].reduce((x, y) => x + y, 0) };
+}
+function growScore(t, pr) {
+  const a = fold(mainArtist(t.artist)), ac = pr.artists.get(a) || 0;
+  const gs = t.genre && pr.withGenre ? (pr.genres.get(t.genre) || 0) / pr.withGenre : 0;
+  const genreOk = !t.genre || !pr.withGenre || gs >= .15;
+  if (ac && genreOk) return 3 + Math.min(ac, 4) * .5 + gs * 3;
+  if (!ac && gs >= .5 && (t.liked || (t.plays || 0) >= 8)) return 2 + gs * 2;
+  return 0;
+}
+let growing = false;
+async function growPlaylists(force = false) {
+  if (growing || (S.user && !S.lastSync)) return;
+  const last = await kv.get('growAt', 0); if (!force && Date.now() - last < 60 * 60 * 1000) return;
+  growing = true;
+  try {
+    await kv.set('growAt', Date.now());
+    const rc = recentPlays();
+    const cands = visible().filter(t => isSong(t) && (t.liked || (t.plays || 0) >= 5 || (rc.get(t.id) || 0) >= 3));
+    const pls = [...S.playlists.values()].filter(p => p.auto !== false && p.tracks.length >= 8);
+    const picks = new Map(); // song → best playlists (a song joins at most two)
+    for (const p of pls) {
+      const pr = plProfile(p); if (pr.n < 8) continue;
+      const have = new Set(p.tracks), gone = new Set(p.removed || []);
+      for (const t of cands) { if (have.has(t.id) || gone.has(t.id)) continue; const sc = growScore(t, pr); if (sc) { if (!picks.has(t.id)) picks.set(t.id, []); picks.get(t.id).push([p, sc]); } }
+    }
+    const per = new Map();
+    for (const [id, list] of picks) for (const [p, sc] of list.sort((a, b) => b[1] - a[1]).slice(0, 2)) { if (!per.has(p.id)) per.set(p.id, []); per.get(p.id).push([id, sc]); }
+    let total = 0;
+    for (const [pid, list] of per) {
+      const p = S.playlists.get(pid); const wk = Date.now() - 7 * DAY;
+      const thisWeek = (p.added || []).filter(x => x.at > wk).length; const room = Math.max(0, 12 - thisWeek); if (!room) continue;
+      const take = list.sort((a, b) => b[1] - a[1]).slice(0, Math.min(6, room)); if (!take.length) continue;
+      const now = Date.now();
+      for (const [id] of take) { p.tracks.push(id); }
+      const t0 = id => T(id);
+      p.added = [...(p.added || []).filter(x => x.at > now - 30 * DAY), ...take.map(([id]) => ({ id, at: now, why: t0(id)?.liked ? 'You liked it' : `You’ve played it ${t0(id)?.plays || 0} times` }))];
+      await savePlaylist(p); total += take.length;
+    }
+    if (total) { S.ver++; bgRender(); }
+  } finally { growing = false; }
+}
+function growBox(p) {
+  if (p.tracks.length < 8 && !(p.added || []).length) return '';
+  const wk = Date.now() - 7 * DAY;
+  const fresh = (p.added || []).filter(x => x.at > wk && p.tracks.includes(x.id) && T(x.id));
+  const on = p.auto !== false;
+  const sw2 = `<button class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" data-action="grow-toggle" data-pl="${p.id}" aria-label="Add songs on its own"></button>`;
+  if (!fresh.length) return `<div class="grow-bar"><span>${icon('new')}</span><div><b>Grows on its own</b><em>${on ? 'Adds songs you love that fit, and drops ones you keep skipping' : 'Off · this playlist only changes when you change it'}</em></div>${sw2}</div>`;
+  return `<section class="grow-box"><div class="grow-head"><div><b>Added for you this week</b><em>${count(fresh.length)} that fit this playlist</em></div><button class="btn small ghost" data-action="grow-undo-all" data-pl="${p.id}">Undo all</button>${sw2}</div>
+    <div class="grow-list">${fresh.map(x => { const t = T(x.id); return `<div class="grow-row"><img loading="lazy" src="${artOf(t)}" alt=""><div class="ellipsis"><b class="ellipsis">${esc(t.title)}</b><em class="ellipsis">${esc(t.artist)} · ${esc(x.why || '')}</em></div><button class="btn small ghost" data-action="grow-undo" data-pl="${p.id}" data-id="${x.id}">Undo</button></div>`; }).join('')}</div></section>`;
+}
+async function growUndo(pid, ids) {
+  const p = S.playlists.get(pid); if (!p) return;
+  const set = new Set(ids);
+  p.tracks = p.tracks.filter(x => !set.has(x));
+  p.removed = [...new Set([...(p.removed || []), ...ids])];
+  p.added = (p.added || []).filter(x => !set.has(x.id));
+  await savePlaylist(p); render();
+}
+/** Skipping a song early three times while playing a playlist takes it out of that playlist. */
+function noteSkip() {
+  const t = current(); if (!isSong(t)) return;
+  const r = P.contextRoute || ''; if (!r.startsWith('playlist/')) return;
+  const p = S.playlists.get(r.slice(9)); if (!p || p.auto === false || !p.tracks.includes(t.id)) return;
+  if (engine.el.currentTime > 30 || engine.el.currentTime < 1) return;
+  p.skips = p.skips || {}; p.skips[t.id] = (p.skips[t.id] || 0) + 1;
+  if (p.skips[t.id] < 3) { db.put('playlists', p.id, p); return; }
+  delete p.skips[t.id];
+  const i = p.tracks.indexOf(t.id);
+  p.tracks = p.tracks.filter(x => x !== t.id); p.removed = [...new Set([...(p.removed || []), t.id])];
+  savePlaylist(p);
+  toast(`Took “${t.title}” out of ${p.name}. You skipped it 3 times.`, ['Undo', async () => { p.tracks.splice(i, 0, t.id); p.removed = p.removed.filter(x => x !== t.id); await savePlaylist(p); render(); }]);
+}
+
+/* =====================================================================
+   Clean Up: one place to tidy the library, with 30-day undo
+   ===================================================================== */
+const JUNK_RES = [
+  /\s*[\(\[][^\)\]]*\bofficial\b[^\)\]]*\b(?:video|audio|lyrics?|visuali[sz]er|mv)\b[^\)\]]*[\)\]]/gi,
+  /\s*[\(\[]\s*(?:official\s+)?(?:music\s+video|lyrics?|lyric\s+video|audio|video|visuali[sz]er|hd|hq|4k|mv|m\/v)\s*[\)\]]/gi,
+  /\s+[-–|]\s*official\s+(?:music\s+)?(?:video|audio|lyric\s+video|visuali[sz]er)\s*$/i,
+  /\s*[\(\[]?(?:www\.)?[a-z0-9-]+\.(?:com|net|org)[\)\]]?(?=\s|$)/gi,
+  /^(?:y2mate|ytmp3|x2download|savefrom|savetube|mp3juices?)(?:\.\w+)?\s*[-_–]\s*/i,
+  /\s*\.(?:mp3|m4a|wav|flac)$/i,
+];
+function cleanTitle(t) {
+  let s = String(t.title || '');
+  for (const re of JUNK_RES) s = s.replace(re, '');
+  const a = mainArtist(t.artist);
+  if (a && !/^unknown/i.test(a)) { const re = new RegExp('^' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s+[-–—]\\s+', 'i'); const x = s.replace(re, ''); if (x.trim()) s = x; }
+  if (/_/.test(s) && !/\s/.test(s.replace(/_/g, ''))) s = s.replace(/_+/g, ' ');
+  s = s.replace(/^\s*[-–|]\s+/, '').replace(/\s{2,}/g, ' ').trim();
+  return s || t.title;
+}
+function cleanupScan() {
+  const songs = [...S.tracks.values()].filter(t => isSong(t));
+  const names = songs.filter(t => !t.edited && cleanTitle(t) !== t.title).map(t => ({ t, to: cleanTitle(t) }));
+  const covers = songs.filter(t => t.designedCover && !/^unknown/i.test(t.artist || '') && !(S.cleanNoArt || []).includes(t.id));
+  const byKey = new Map();
+  for (const t of songs) { if (/^unknown/i.test(t.artist || '')) continue; const k = fold(t.artist); if (!k) continue; if (!byKey.has(k)) byKey.set(k, new Map()); const m = byKey.get(k); m.set(t.artist, (m.get(t.artist) || 0) + 1); }
+  const artists = [];
+  for (const m of byKey.values()) if (m.size > 1) { const ranked = [...m].sort((a, b) => b[1] - a[1] || (/[A-Z]/.test(b[0]) - /[A-Z]/.test(a[0]))); artists.push({ to: ranked[0][0], from: ranked.slice(1).map(x => x[0]), n: ranked.slice(1).reduce((x, y) => x + y[1], 0) }); }
+  return { names, covers, artists, dups: duplicateGroups().length, eyes: reviewList().length };
+}
+let cleanMemo = { v: -1, at: 0, r: null };
+function cleanupCached() { if (!cleanMemo.r || cleanMemo.v !== S.ver || Date.now() - cleanMemo.at > 60000) cleanMemo = { v: S.ver, at: Date.now(), r: cleanupScan() }; return cleanMemo.r; }
+function cleanupCount() { try { const c = cleanupCached(); return c.names.length + c.covers.length + c.artists.reduce((x, y) => x + y.n, 0) + c.dups + c.eyes; } catch { return 0; } }
+const CU = { busy: '', open: '' };
+async function cleanLog() { const l = await kv.get('cleanLog', []); return l.filter(x => Date.now() - x.at < 30 * DAY); }
+async function pushLog(entry) { const l = await cleanLog(); l.unshift(entry); await kv.set('cleanLog', l.slice(0, 40)); S.cleanLogCache = l.slice(0, 40); }
+async function fixNames(list) {
+  const items = [];
+  for (const { t, to } of list) { const before = t.title; if (to === before) continue; t.title = to; learnFix(t, { title: before, artist: t.artist }); if (t.designedCover) await setArt(t, await meta.makeCover(t.title, t.artist, t.category)); await saveTrack(t); items.push({ id: t.id, f: 'title', from: before, to }); }
+  return items;
+}
+async function fixArtists(groups) {
+  const items = [];
+  for (const g of groups) for (const t of S.tracks.values()) if (g.from.includes(t.artist)) { const before = t.artist; t.artist = g.to; await saveTrack(t); items.push({ id: t.id, f: 'artist', from: before, to: g.to }); }
+  return items;
+}
+async function fixCovers(ts, progress) {
+  const items = []; let i = 0;
+  for (const t of ts) {
+    i++; progress?.(i, ts.length);
+    if (!navigator.onLine) break;
+    try {
+      const found = await Promise.race([meta.lookup({ title: t.title, artist: t.artist, duration: t.duration }), new Promise(r => setTimeout(() => r(undefined), 15000))]);
+      if (found === undefined) continue;
+      if (!found?.artUrl) { S.cleanNoArt = [...new Set([...(S.cleanNoArt || []), t.id])]; continue; }
+      const b = await Promise.race([meta.fetchImage(found.artUrl), new Promise(r => setTimeout(() => r(null), 15000))]); if (!b) continue;
+      await setArt(t, b); t.designedCover = false; Object.assign(t, { album: t.album || found.album, genre: t.genre || found.genre, year: t.year || found.year });
+      await saveTrack(t); if (S.user && t.cloud) cloud.uploadFile('art/' + t.id, b).catch(() => {});
+      items.push({ id: t.id, f: 'cover', from: 'designed', to: 'found' });
+    } catch (e) { console.warn('cover', e); }
+  }
+  kv.set('cleanNoArt', S.cleanNoArt || []);
+  return items;
+}
+async function runCleanup(kind) {
+  if (CU.busy) return;
+  const c = cleanupScan(); CU.busy = kind; render();
+  try {
+    let items = [];
+    if (kind === 'names' || kind === 'all') items = items.concat(await fixNames(c.names));
+    if (kind === 'artists' || kind === 'all') items = items.concat(await fixArtists(c.artists));
+    if (kind === 'covers' || kind === 'all') items = items.concat(await fixCovers(c.covers, (i, n) => { const el = $('#cu-prog'); if (el) el.textContent = `Finding covers… ${i} of ${n}`; }));
+    S.ver++;
+    if (items.length) { await pushLog({ id: uid(), at: Date.now(), kind, n: items.length, items }); toast(`Fixed ${count(items.length)}`, ['Undo', () => undoCleanup(0)]); }
+    else toast(kind === 'covers' ? 'No new covers found right now' : 'Nothing to fix');
+  } finally { CU.busy = ''; cleanMemo.r = null; render(); }
+}
+async function undoCleanup(i) {
+  const l = await cleanLog(); const e = l[i]; if (!e) return;
+  let n = 0;
+  for (const it of e.items) {
+    const t = T(it.id); if (!t) continue;
+    if (it.f === 'cover') { await setArt(t, await meta.makeCover(t.title, t.artist, t.category)); t.designedCover = true; S.cleanNoArt = [...new Set([...(S.cleanNoArt || []), t.id])]; await saveTrack(t); n++; continue; }
+    if (t[it.f] !== it.to) continue; // changed again since; leave it
+    t[it.f] = it.from; await saveTrack(t); n++;
+  }
+  if (e.items.some(x => x.f === 'cover')) kv.set('cleanNoArt', S.cleanNoArt || []);
+  l.splice(i, 1); await kv.set('cleanLog', l); S.cleanLogCache = l; S.ver++; cleanMemo.r = null; render();
+  toast(`Put back ${count(n)}`);
+}
+const CU_LABEL = { all: 'Fix all', names: 'Fixed names', artists: 'Matched artist names', covers: 'Found covers' };
+VIEWS.cleanup = () => {
+  const c = cleanupCached(); const log = S.cleanLogCache || []; if (!S.cleanLogCache) cleanLog().then(l => { S.cleanLogCache = l; if (S.route === 'cleanup') render(); });
+  const total = c.names.length + c.covers.length + c.artists.length;
+  const card = (k, title, n, sub, body, act) => `<section class="cu-card${CU.open === k ? ' open' : ''}"><button class="cu-head" data-action="cu-open" data-id="${k}"><div class="cu-n${n ? '' : ' ok'}">${n ? n : icon('check')}</div><div class="cu-t"><b>${title}</b><em>${sub}</em></div>${act || ''}${icon('back', 'chev')}</button>${CU.open === k && body ? `<div class="cu-body">${body}</div>` : ''}</section>`;
+  const fixBtn = (k, n) => n ? `<span class="btn small" data-action="cu-run" data-id="${k}" role="button">${CU.busy === k ? 'Fixing…' : 'Fix'}</span>` : '';
+  const more = n => n > 40 ? `<div class="cu-more muted">and ${n - 40} more</div>` : '';
+  return `${back()}<div class="page-head"><div><div class="eyebrow">Library</div><h1>Clean Up</h1><div class="lede">${total || c.dups || c.eyes ? 'Tidy names, covers and artists in one tap. Everything can be put back for 30 days.' : 'Your library is clean.'}</div></div>
+      ${total ? `<button class="btn primary" data-action="cu-run" data-id="all"${CU.busy ? ' disabled' : ''}>${CU.busy ? 'Working…' : 'Fix all'}</button>` : ''}</div>
+    ${CU.busy ? `<div class="cu-prog" id="cu-prog" role="status">${CU.busy === 'covers' || CU.busy === 'all' ? 'Working…' : 'Fixing…'}</div>` : ''}
+    <div class="cu-list">
+    ${card('names', 'Names to fix', c.names.length, c.names.length ? 'Extra words like “Official Video” or the artist’s name in the title' : 'Every song name looks clean', c.names.slice(0, 40).map(({ t, to }) => `<div class="cu-row"><img loading="lazy" src="${artOf(t)}" alt=""><div class="ellipsis"><s class="ellipsis">${esc(t.title)}</s><b class="ellipsis">${esc(to)}</b></div></div>`).join('') + more(c.names.length), fixBtn('names', c.names.length))}
+    ${card('covers', 'Missing covers', c.covers.length, c.covers.length ? 'Songs with a placeholder cover. Real artwork is looked up online.' : 'Every song has its real cover', c.covers.slice(0, 40).map(t => `<div class="cu-row"><img loading="lazy" src="${artOf(t)}" alt=""><div class="ellipsis"><b class="ellipsis">${esc(t.title)}</b><em class="ellipsis">${esc(t.artist)}</em></div></div>`).join('') + more(c.covers.length), fixBtn('covers', c.covers.length))}
+    ${card('artists', 'Mixed-up artist names', c.artists.length, c.artists.length ? 'The same artist spelled different ways' : 'Each artist is spelled one way', c.artists.slice(0, 40).map(g => `<div class="cu-row text"><div class="ellipsis"><s class="ellipsis">${g.from.map(esc).join(', ')}</s><b class="ellipsis">${esc(g.to)} · ${count(g.n)}</b></div></div>`).join('') + more(c.artists.length), fixBtn('artists', c.artists.length))}
+    <a class="cu-card link" href="#/duplicates"><div class="cu-head"><div class="cu-n${c.dups ? '' : ' ok'}">${c.dups || icon('check')}</div><div class="cu-t"><b>Possible duplicates</b><em>${c.dups ? 'You choose which copy to keep. Nothing is removed on its own.' : 'No duplicates found'}</em></div>${icon('back', 'chev')}</div></a>
+    <a class="cu-card link" href="#/review"><div class="cu-head"><div class="cu-n${c.eyes ? '' : ' ok'}">${c.eyes || icon('check')}</div><div class="cu-t"><b>Needs your eyes</b><em>${c.eyes ? 'Songs Fof Music couldn’t name for sure' : 'Nothing needs checking'}</em></div>${icon('back', 'chev')}</div></a>
+    </div>
+    ${log.length ? `<section class="section"><div class="section-head"><h2>Recent fixes</h2></div><div class="settings-group">${log.map((e, i) => `<div class="set-row"><div class="lbl"><b>${CU_LABEL[e.kind] || 'Fixed'} · ${count(e.n)}</b><span>${new Date(e.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · can be put back until ${new Date(e.at + 30 * DAY).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span></div><button class="btn small ghost" data-action="cu-undo" data-id="${i}">Undo</button></div>`).join('')}</div></section>` : ''}`;
+};
+
+/* =====================================================================
+   Offline: what stays on this phone
+   ===================================================================== */
+const OFF_DEF = { top: 100, liked: true, upnext: true, podcasts: true, quran: true, limitGB: 8, wifiOnly: true };
+const offSet = () => ({ ...OFF_DEF, ...(S.settings.offline || {}) });
+async function setOff(k, v) { S.settings.offline = { ...offSet(), [k]: v }; await saveSettings(); render(); setTimeout(autoOffline, 800); }
+const onWifi = () => { const c = navigator.connection; if (!c || !c.type) return true; return c.type === 'wifi' || c.type === 'ethernet'; };
+async function storageUse() {
+  const songs = [...S.tracks.values()].filter(t => t.local);
+  const ext = [...S.ext.values()].filter(t => t.path || t.local);
+  const est = (n, ts) => ts.reduce((x, t) => x + (t.size || (t.duration || 200) * 24000), 0);
+  const r = { music: est(0, songs), podcasts: est(0, ext.filter(t => t.kind === 'episode')), quran: est(0, ext.filter(t => t.kind === 'ayah' || t.kind === 'surahrec')), songs: songs.length, eps: ext.filter(t => t.kind === 'episode').length, free: null };
+  try { const e = await navigator.storage?.estimate?.(); if (e?.quota) r.free = Math.max(0, e.quota - e.usage); } catch {}
+  return r;
+}
+VIEWS.offline = () => {
+  const o = offSet(); const u = S.offUse; if (!u || Date.now() - (S.offUseAt || 0) > 15000) { S.offUseAt = Date.now(); storageUse().then(x => { S.offUse = x; if (S.route === 'offline') render(); }); }
+  const used = u ? u.music + u.podcasts + u.quran : 0, cap = o.limitGB * 1e9;
+  const pct = x => Math.max(x ? .8 : 0, Math.min(100, x / cap * 100)).toFixed(1);
+  const tg = (k, label, sub) => `<div class="set-row"><div class="lbl"><b>${label}</b><span>${sub}</span></div><button class="switch ${o[k] ? 'on' : ''}" role="switch" aria-checked="${!!o[k]}" data-action="off-set" data-id="${k}" aria-label="${label}"></button></div>`;
+  const pick = (k, vals, fmtV) => `<div class="seg small">${vals.map(v => `<button class="${o[k] === v ? 'on' : ''}" data-action="off-pick" data-id="${k}" data-v="${v}">${fmtV(v)}</button>`).join('')}</div>`;
+  const on = S.settings.autoOffline !== false;
+  return `${back()}<div class="page-head"><div><div class="eyebrow">Settings</div><h1>Offline</h1><div class="lede">Choose what stays on this phone, so it plays with no signal.</div></div></div>
+    <section class="off-store"><div class="off-top"><b>${u ? bytes(used) : '…'}</b><span class="muted">of ${o.limitGB} GB${u?.free != null ? ` · ${bytes(u.free)} free on this phone` : ''}</span></div>
+      <div class="off-bar"><i class="m" style="width:${u ? pct(u.music) : 0}%"></i><i class="p" style="width:${u ? pct(u.podcasts) : 0}%"></i><i class="q" style="width:${u ? pct(u.quran) : 0}%"></i></div>
+      <div class="off-key"><span><i class="m"></i>Music ${u ? `· ${count(u.songs)}` : ''}</span><span><i class="p"></i>Podcasts ${u ? `· ${u.eps}` : ''}</span><span><i class="q"></i>Quran</span></div></section>
+    <div class="settings-group">${sw('autoOffline', 'Keep music on this phone', 'Saves what you choose below and keeps it up to date')}</div>
+    <div class="settings-group${on ? '' : ' dim'}">
+      <div class="set-row"><div class="lbl"><b>Your top songs</b><span>Your most played, kept fresh</span></div>${pick('top', [0, 50, 100, 250], v => v ? v : 'None')}</div>
+      ${tg('liked', 'Liked Songs', 'Every song you like')}
+      ${tg('upnext', 'Up next', 'The next songs in your queue, saved ahead')}
+      ${tg('podcasts', 'Podcasts', 'The newest episode of each show you follow')}
+      ${tg('quran', 'Quran', 'The last 3 surahs you listened to')}
+    </div>
+    <div class="settings-group">
+      <div class="set-row"><div class="lbl"><b>Space limit</b><span>Stops saving new songs past this</span></div>${pick('limitGB', [2, 4, 8, 16, 32], v => v + ' GB')}</div>
+      ${tg('wifiOnly', 'Only on Wi-Fi', 'Saves songs only when you’re on Wi-Fi')}
+      <div class="set-row"><div class="lbl"><b>Save now</b><span>${downloading ? 'Saving…' : 'Runs on its own every 15 minutes'}</span></div><button class="btn" data-action="off-now">Save now</button></div>
+      <div class="set-row"><div class="lbl"><b>Remove songs saved on their own</b><span>Songs you saved yourself stay</span></div><button class="btn ghost" data-action="off-clear">Remove</button></div>
+    </div>`;
+};
+/** Quran audio kept on the phone: { 'rid:n': { at, files: { id: path } } } for the last 3 surahs you played. */
+const keepPath = id => { for (const v of Object.values(S.qOff || {})) if (v.files?.[id]) return { path: v.files[id] }; return {}; };
+async function offlineQuran(o) {
+  if (!NATIVE) return;
+  S.qOff = S.qOff || await kv.get('qOff', {});
+  const seen = [];
+  if (o.quran) for (const id of S.history) { const m = /^(qur|qs):(.+):(\d+)$/.exec(id); if (!m) continue; const t = S.ext.get(id); const n = t?.surah || (m[1] === 'qs' ? +m[3] : 0); if (!n || seen.some(x => x.n === n)) continue; seen.push({ n, rid: m[2] }); if (seen.length >= 3) break; }
+  const keys = new Set(seen.map(x => x.rid + ':' + x.n));
+  for (const [k, v] of Object.entries(S.qOff)) if (!keys.has(k)) { for (const [id, path] of Object.entries(v.files || {})) { await NATIVE.removeFile({ name: path.split('/').pop() }).catch(() => {}); const t = S.ext.get(id); if (t?.path === path) delete t.path; } delete S.qOff[k]; }
+  await kv.set('qOff', S.qOff);
+  for (const { n, rid } of seen) {
+    const k = rid + ':' + n; if (S.qOff[k]?.done) continue;
+    const r = recById(rid); if (!r) continue;
+    let items = [];
+    try {
+      if (r.kind === 'verse') { const audio = QR.audio.get(n + r.id) || await quran.verseAudio(n, r.id); QR.audio.set(n + r.id, audio); const ayahs = await qTextNow(n); items = ayahs.map((a, i) => ({ id: `qur:${r.id}:${a.g}`, url: audio[i] })); }
+      else items = [{ id: `qs:${r.id}:${n}`, url: quran.surahUrl(r, n) }];
+    } catch { continue; }
+    const rec0 = S.qOff[k] = S.qOff[k] || { at: Date.now(), files: {} };
+    let ok = true;
+    for (const it of items) {
+      if (rec0.files[it.id]) continue;
+      if (!it.url || !navigator.onLine || (offSet().wifiOnly && !onWifi())) { ok = false; break; }
+      try { const x = await NATIVE.download({ url: it.url, name: 'q-' + it.id.replace(/[^\w]/g, '_') + '.mp3' }); rec0.files[it.id] = x.path; const t = S.ext.get(it.id); if (t) t.path = x.path; } catch { ok = false; break; }
+    }
+    rec0.done = ok; await kv.set('qOff', S.qOff);
+  }
+}
+
+/* =====================================================================
+   Drive mode: big buttons only
+   ===================================================================== */
+function driveNow() {
+  const t = current();
+  return t ? `<img class="dr-art" id="dr-art" src="${artOf(t, 'full')}" alt=""><div class="dr-meta"><b class="ellipsis" id="dr-title">${esc(t.title)}</b><span class="ellipsis" id="dr-artist">${esc(t.artist)}</span></div>`
+    : `<div class="dr-art dr-empty">${icon('note')}</div><div class="dr-meta"><b id="dr-title">Nothing playing</b><span id="dr-artist">Tap Fof Flow to start</span></div>`;
+}
+VIEWS.drive = () => {
+  const lastEp = Object.entries(S.pod?.prog || {}).filter(([id, p]) => !p.done && S.ext.get(id)).sort((a, b) => (b[1].at || 0) - (a[1].at || 0))[0];
+  return `<div class="drive">
+    <div class="dr-top"><button class="dr-x" data-action="drive-exit" aria-label="Leave Drive mode">${icon('x')}</button><span class="dr-clock" id="dr-clock">${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span><span class="dr-x-sp"></span></div>
+    <div class="dr-now" id="dr-now">${driveNow()}</div>
+    <div class="dr-ctl"><button data-action="prev" aria-label="Previous">${icon('prev')}</button><button class="dr-play" data-action="toggle" aria-label="Play or pause"><span class="when-playing">${icon('pause')}</span><span class="when-paused">${icon('play')}</span></button><button data-action="next" aria-label="Next">${icon('next')}</button></div>
+    <div class="dr-grid">
+      <button class="dr-tile flow" data-action="flow">${icon('flow')}<b>Fof Flow</b></button>
+      <button class="dr-tile" data-action="drive-pod">${icon('podcast')}<b>Podcasts</b><em class="ellipsis">${lastEp ? esc(S.ext.get(lastEp[0]).title) : 'Newest episode'}</em></button>
+      <button class="dr-tile" data-action="drive-quran">${icon('quran')}<b>Quran</b><em class="ellipsis">${S.quranSpot ? 'Pick up where you left off' : 'Start listening'}</em></button>
+      <button class="dr-tile" data-action="drive-maps">${icon('car')}<b>Directions</b><em>Apple or Google Maps</em></button>
+    </div></div>`;
+};
+function paintDrive(t) {
+  const box = $('#dr-now'); if (!box || !t) return;
+  if ($('#dr-title')?.textContent !== t.title || $('#dr-artist')?.textContent !== t.artist) box.innerHTML = driveNow();
+}
+setInterval(() => { const c = $('#dr-clock'); if (c) c.textContent = new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); }, 15000);
+async function drivePod() {
+  const lastEp = Object.entries(S.pod?.prog || {}).filter(([id, p]) => !p.done && S.ext.get(id)).sort((a, b) => (b[1].at || 0) - (a[1].at || 0))[0];
+  if (lastEp) return podPlay(lastEp[0]);
+  for (const s of S.pod?.subs || []) { const r = await pods.episodes(s.id).catch(() => null); const ep = r?.episodes?.[0]; if (ep) { PC.ep = PC.ep || new Map(); PC.ep.set(ep.id, ep); saveExt({ ...ep, ...(S.ext.get(ep.id) || {}) }); return podPlay(ep.id); } }
+  toast('Follow a show in Podcasts first');
+}
+function driveMaps() {
+  const open = u => { if (IN_APP) location.href = u; else window.open(u, '_blank'); };
+  sheet(`<h2>Directions</h2><p class="muted">Your music keeps playing while you drive.</p>
+    <input id="dr-dest" class="input full" placeholder="Where to? (optional)" autocomplete="off" enterkeyhint="go">
+    <div class="dr-maps"><button class="btn primary big" data-m="apple">Apple Maps</button><button class="btn big" data-m="google">Google Maps</button></div>`, el => {
+    el.querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
+      const q = el.querySelector('#dr-dest').value.trim(), e = encodeURIComponent(q);
+      const u = b.dataset.m === 'apple' ? (q ? `https://maps.apple.com/?daddr=${e}&dirflg=d` : 'https://maps.apple.com/') : IS_IOS ? (q ? `comgooglemaps://?daddr=${e}&directionsmode=driving` : 'comgooglemaps://') : (q ? `https://www.google.com/maps/dir/?api=1&destination=${e}&travelmode=driving` : 'https://www.google.com/maps');
+      closeSheet(); open(u);
+      if (b.dataset.m === 'google' && IS_IOS) setTimeout(() => { if (!document.hidden) open(q ? `https://www.google.com/maps/dir/?api=1&destination=${e}&travelmode=driving` : 'https://www.google.com/maps'); }, 1200);
+    });
+  });
+}
+
+/* actions for the screens above */
+const ACT2 = {
+  'grow-toggle': async a => { const p = S.playlists.get(a.dataset.pl); if (!p) return; p.auto = p.auto === false; await savePlaylist(p); render(); toast(p.auto ? 'This playlist will grow on its own' : 'Auto-add is off for this playlist'); if (p.auto) growPlaylists(true).catch(() => {}); },
+  'grow-undo': a => growUndo(a.dataset.pl, [a.dataset.id]),
+  'grow-undo-all': a => { const p = S.playlists.get(a.dataset.pl); const wk = Date.now() - 7 * DAY; return growUndo(a.dataset.pl, (p?.added || []).filter(x => x.at > wk).map(x => x.id)); },
+  'cu-open': a => { CU.open = CU.open === a.dataset.id ? '' : a.dataset.id; render(); },
+  'cu-run': (a, e) => { e.stopPropagation(); return runCleanup(a.dataset.id); },
+  'cu-undo': a => undoCleanup(+a.dataset.id),
+  'off-set': a => setOff(a.dataset.id, !offSet()[a.dataset.id]),
+  'off-pick': a => setOff(a.dataset.id, +a.dataset.v),
+  'off-now': () => { toast('Saving to this phone…'); return autoOfflineNow(true).then(() => { S.offUseAt = 0; render(); }); },
+  'off-clear': async () => { const ids = [...S.tracks.values()].filter(t => t.autoSaved && t.local).map(t => t.id); if (!ids.length) return toast('Nothing saved on its own'); await removeDownloads(ids); S.offUseAt = 0; render(); },
+  'drive-exit': () => go(S.driveFrom && S.driveFrom !== 'drive' ? S.driveFrom : 'home'),
+  'drive-pod': () => drivePod(),
+  'drive-quran': () => S.quranSpot ? qResume() : qPlay(1),
+  'drive-maps': () => driveMaps(),
+};
+
+/* for checking things from the console */
+window.__fof = { growPlaylists, cleanupScan, runCleanup, undoCleanup, S, P };
