@@ -9,7 +9,7 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 
-const URL = 'https://medfofana9-web.github.io/cadence/';
+const SITE = 'https://medfofana9-web.github.io/cadence/';
 const HOME = os.homedir();
 const AUDIO = /\.(mp3|m4a|aac|flac|wav|ogg|oga|opus|alac|aif|aiff)$/i;
 const CFG = () => path.join(app.getPath('userData'), 'settings.json');
@@ -92,7 +92,7 @@ function createWindow(hidden) {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), backgroundThrottling: false, contextIsolation: true, sandbox: true },
   });
   win.webContents.setUserAgent(win.webContents.getUserAgent() + ' FofMusicDesktop/1');
-  win.loadURL(URL);
+  win.loadURL(SITE);
   win.webContents.on('did-finish-load', () => { ready = true; setTimeout(() => scan(true), 8000); });
   if (process.env.FOF_SMOKE) win.webContents.once('did-finish-load', () => setTimeout(async () => {
     const r = await win.webContents.executeJavaScript(`(async () => JSON.stringify({ bridge: !!window.fofDesktop, view: document.querySelector('#view')?.children.length || 0, title: document.title, desktop: document.documentElement.classList.contains('desktop-app'), folders: await window.fofDesktop.folders(), file: await (async () => { const f = (await window.fofDesktop.folders())[0]; if (!f) return 'no folder'; const u = 'fofile://local' + (f + '/test tone.wav').split('/').map(encodeURIComponent).join('/'); const r = await fetch(u, { headers: { Range: 'bytes=0-99' } }); const a = new Audio(u); const ok = await new Promise(res => { a.onloadedmetadata = () => res('audio ' + a.duration.toFixed(1) + 's'); a.onerror = () => res('audio error'); setTimeout(() => res('audio timeout'), 8000); }); return r.status + ' ' + (await r.arrayBuffer()).byteLength + ' ' + ok; })() }))()`).catch(e => String(e));
@@ -100,10 +100,10 @@ function createWindow(hidden) {
     fs.writeFileSync('/tmp/fof-smoke.png', img.toPNG()); fs.writeFileSync('/tmp/fof-smoke.txt', r + '\ntray:' + !!tray);
     quitting = true; app.quit();
   }, 15000));
-  win.webContents.on('did-fail-load', (_e, code) => { if (code !== -3) setTimeout(() => win && win.loadURL(URL), 15000); });
+  win.webContents.on('did-fail-load', (_e, code) => { if (code !== -3) setTimeout(() => win && win.loadURL(SITE), 15000); });
   // links to other sites open in your browser
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
-  win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(URL)) { e.preventDefault(); shell.openExternal(url); } });
+  win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(SITE)) { e.preventDefault(); shell.openExternal(url); } });
   // closing the window keeps the music playing; quit from the menu bar
   win.on('close', e => { if (!quitting) { e.preventDefault(); win.hide(); if (app.dock) app.dock.hide(); } });
 }
