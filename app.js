@@ -393,20 +393,31 @@ async function cachePlaylistCover(id) {
 /* =====================================================================
    Updates
    ===================================================================== */
+/* Updates: the app picks up a new version on its own.
+   Nothing playing → it refreshes right away. Music playing → it waits until you pause or leave the app,
+   and the Update bar lets you do it now. */
+let pendingUpdate = '';
 async function checkVersion() {
   try {
     const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) return;
     const { version } = await r.json();
-    // these files are older than what's published (a cached copy): refresh once, right away
-    if (BUILD !== 'dev' && version !== BUILD && engine.el.paused) {
-      let tried = ''; try { tried = sessionStorage.getItem('fof-fresh') || ''; } catch {}
-      if (tried !== version) { try { sessionStorage.setItem('fof-fresh', version); } catch {} return applyUpdate(); }
-    }
-    if (!S.version) S.version = version;
-    else if (version !== S.version) { if (IN_APP && engine.el.paused && !IMP.running) return applyUpdate(); $('#update-bar').classList.add('show'); }
+    if (!S.version) S.version = BUILD !== 'dev' ? BUILD : version;
+    if (version === 'dev' || version === S.version) return;
+    pendingUpdate = version;
+    let last = {}; try { last = JSON.parse(sessionStorage.getItem('fof-fresh') || '{}'); } catch {}
+    const recentlyTried = last.v === version && Date.now() - (last.t || 0) < 120000; // the site can take a minute to publish everywhere
+    if (!recentlyTried && engine.el.paused && !IMP.running) { try { sessionStorage.setItem('fof-fresh', JSON.stringify({ v: version, t: Date.now() })); } catch {} return applyUpdate(); }
+    $('#update-bar').classList.add('show');
   } catch {}
 }
+function updateWhenQuiet() {
+  if (!pendingUpdate || IMP.running || P.mem) return;
+  setTimeout(() => { if (pendingUpdate && engine.el.paused && !IMP.running && !P.mem) applyUpdate(); }, 1500);
+}
+for (const el of engine.els) el.addEventListener('pause', () => { if (document.hidden || IN_APP) updateWhenQuiet(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) updateWhenQuiet(); });
+setInterval(checkVersion, 10 * 60 * 1000);
 async function applyUpdate() {
   flushListen(); await savePlayer(true);
   if ('caches' in window) for (const k of await caches.keys()) await caches.delete(k);
