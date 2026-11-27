@@ -2627,10 +2627,16 @@ async function uploadLocal({ quiet = false } = {}) {
   if (uploading) return;
   const ts = [...S.tracks.values()].filter(t => t.local && !t.cloud);
   if (!ts.length) return; uploading = true;
-  let n = 0; if (!quiet) toast(`Uploading ${count(ts.length)} to your cloud library…`);
-  for (const t of ts) { try { const a = await db.get('audio', t.id); const art = await db.get('art', t.id); if (a) { await uploadTrack(t, a, art); n++; } } catch (e) { syncFailed(e); break; } }
+  let n = 0, failed = 0, lastErr = null; if (!quiet) toast(`Uploading ${count(ts.length)} to your cloud library…`);
+  // One song that won't upload used to stop every song after it; now it's skipped and the rest keep going.
+  for (const t of ts) {
+    if (!navigator.onLine) break;
+    try { const a = await db.get('audio', t.id); const art = await db.get('art', t.id); if (a) { await uploadTrack(t, a, art); n++; } }
+    catch (e) { failed++; lastErr = e; console.warn('Upload failed:', t.title, e); }
+  }
   uploading = false;
-  if (n || !quiet) toast(`${count(n)} now on all your devices`); render();
+  if (failed && lastErr) syncFailed(lastErr);
+  if (n || !quiet) toast(`${count(n)} now on all your devices` + (failed ? ` · ${failed} couldn't upload, will retry` : '')); render();
 }
 function exportData() {
   const data = { exportedAt: new Date().toISOString(), app: 'Fof Music', songs: [...S.tracks.values()].map(({ colors, ...t }) => t), playlists: [...S.playlists.values()], listeningLog: S.log, recentlyPlayed: S.history, settings: S.settings };
