@@ -328,7 +328,8 @@ async function syncDown() {
     }
     const st = await cloud.pullState();
     if (st?.data) mergeState(st.data);
-    S.lastSync = Date.now();
+    const firstSync = !S.lastSync; S.lastSync = Date.now();
+    if (firstSync && window.fofDesktop) setTimeout(() => window.fofDesktop.scanNow(), 3000);
     queueStatePush();
     // songs added on this device before signing in go up to the cloud on their own
     if ([...S.tracks.values()].some(t => t.local && !t.cloud) && !uploading) await uploadLocal({ quiet: true });
@@ -4146,7 +4147,7 @@ async function growPlaylists(force = false) {
       const thisWeek = (p.added || []).filter(x => x.at > wk).length; const room = Math.max(0, 12 - thisWeek); if (!room) continue;
       const take = list.sort((a, b) => b[1] - a[1]).slice(0, Math.min(6, room)); if (!take.length) continue;
       const now = Date.now();
-      for (const [id] of take) { p.tracks.push(id); }
+      for (const [id] of take) { if (!p.tracks.includes(id)) p.tracks.push(id); }
       const t0 = id => T(id);
       p.added = [...(p.added || []).filter(x => x.at > now - 30 * DAY), ...take.map(([id]) => ({ id, at: now, why: t0(id)?.liked ? 'You liked it' : `You’ve played it ${t0(id)?.plays || 0} times` }))];
       await savePlaylist(p); total += take.length;
@@ -4448,6 +4449,8 @@ if (DESK) {
     try {
       // wait until the library has loaded and any import in progress has finished
       for (let i = 0; i < 120 && (IMP.running || !S.tracks.size && !S.bootDone); i++) await new Promise(r => setTimeout(r, 1000));
+      // your library has to arrive from the cloud first, so nothing already in it is added twice
+      if (cloud.cloudConfigured() && (!S.user || !S.lastSync)) return;
       const seen = new Set(await kv.get('deskSeen', []));
       const have = new Set([...S.tracks.values()].map(t => `${t.file || t.original?.file || ''}|${t.size || 0}`));
       const key = f => `${f.name}|${f.size}|${f.mtime}`;
@@ -4462,8 +4465,7 @@ if (DESK) {
         setTimeout(autoUpload, 3000);
       }
       await kv.set('deskSeen', [...new Set([...seen, ...list.map(key)])].slice(-30000));
-    } catch (e) { console.warn('mac import', e); }
-    busy = false;
+    } catch (e) { console.warn('mac import', e); } finally { busy = false; }
   });
   DESK.onControl(a => { if (a === 'toggle') toggle(); else if (a === 'next') next(); else if (a === 'prev') prev(); else if (a === 'flow') flow(); });
   const tell2 = () => { const t = current(); DESK.state({ title: t?.title || '', artist: t?.artist || '', playing: !engine.el.paused }); };
