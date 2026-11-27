@@ -75,7 +75,7 @@ function createWindow(hidden) {
   win.loadURL(URL);
   win.webContents.on('did-finish-load', () => { ready = true; setTimeout(() => scan(true), 8000); });
   if (process.env.FOF_SMOKE) win.webContents.once('did-finish-load', () => setTimeout(async () => {
-    const r = await win.webContents.executeJavaScript(`JSON.stringify({ bridge: !!window.fofDesktop, view: document.querySelector('#view')?.children.length || 0, title: document.title, desktop: document.documentElement.classList.contains('desktop-app'), folders: await window.fofDesktop.folders() })`).catch(e => String(e));
+    const r = await win.webContents.executeJavaScript(`(async () => JSON.stringify({ bridge: !!window.fofDesktop, view: document.querySelector('#view')?.children.length || 0, title: document.title, desktop: document.documentElement.classList.contains('desktop-app'), folders: await window.fofDesktop.folders() }))()`).catch(e => String(e));
     const img = await win.webContents.capturePage();
     fs.writeFileSync('/tmp/fof-smoke.png', img.toPNG()); fs.writeFileSync('/tmp/fof-smoke.txt', r + '\ntray:' + !!tray);
     quitting = true; app.quit();
