@@ -1,0 +1,18 @@
+{
+  "name": "fof-music-mac",
+  "productName": "Fof Music",
+  "version": "1.0.0",
+  "description": "Fof Music for Mac: plays your library, imports new songs in the background, menu bar mini player.",
+  "main": "main.js",
+  "author": "Med Fofana",
+  "license": "UNLICENSED",
+  "scripts": { "start": "electron .", "dist": "electron-builder --mac zip --universal --publish never" },
+  "devDependencies": { "electron": "^33.2.0", "electron-builder": "^25.1.8" },
+  "build": {
+    "appId": "com.fofmusic.mac",
+    "productName": "Fof Music",
+    "files": ["main.js", "preload.js", "build/tray*.png"],
+    "mac": { "category": "public.app-category.music", "icon": "build/icon.png", "identity": null, "target": ["zip"], "extendInfo": { "LSUIElement": false, "NSAppleEventsUsageDescription": "Fof Music controls playback from the menu bar." } },
+    "artifactName": "FofMusic-mac.${ext}"
+  }
+}

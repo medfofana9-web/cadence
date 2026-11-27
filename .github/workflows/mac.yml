@@ -1,0 +1,63 @@
+name: Build Mac app
+
+# Builds Fof Music for Mac (desktop/) and publishes it to the "mac" release.
+# The app loads the live Fof Music site, so everyday changes need no new build; this only runs when desktop/ changes.
+on:
+  push:
+    branches: [main]
+    paths: ['desktop/**', '.github/workflows/mac.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mac
+  cancel-in-progress: true
+
+jobs:
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm version "1.0.${{ github.run_number }}" --no-git-tag-version --allow-same-version
+          npm install --no-audit --no-fund
+          npx electron-builder --mac dir --universal --publish never
+          APP="dist/mac-universal/Fof Music.app"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep "$APP" && echo signed
+          ditto -c -k --keepParent "$APP" FofMusic-mac.zip
+          ls -la FofMusic-mac.zip
+      - name: Try it
+        working-directory: desktop
+        run: |
+          FOF_SMOKE=1 "dist/mac-universal/Fof Music.app/Contents/MacOS/Fof Music" & PID=$!
+          for i in $(seq 1 60); do [ -f /tmp/fof-smoke.txt ] && break; sleep 2; done
+          kill $PID 2>/dev/null || true
+          cat /tmp/fof-smoke.txt
+          grep -q '"bridge":true' /tmp/fof-smoke.txt
+          mkdir -p shots && cp /tmp/fof-smoke.png shots/ || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-build
+          path: |
+            desktop/FofMusic-mac.zip
+            desktop/shots
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: desktop
+        run: |
+          R="${{ github.repository }}"
+          gh release view mac -R "$R" >/dev/null 2>&1 || gh release create mac -R "$R" --title "Fof Music for Mac" --notes "Fof Music for Mac" --latest=false
+          gh release upload mac FofMusic-mac.zip -R "$R" --clobber

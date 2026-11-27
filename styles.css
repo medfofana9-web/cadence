@@ -1396,3 +1396,7 @@ body:not(.is-paused) .dr-play .when-paused{display:none}
   .dr-ctl button{width:72px;height:72px}
   .dr-ctl .dr-play{width:96px;height:96px}
 }
+
+/* ---------- Mac app window ---------- */
+.desktop-app body::before{content:'';position:fixed;top:0;left:0;right:0;height:26px;-webkit-app-region:drag;z-index:999}
+.desktop-app .sidebar{padding-top:30px}

@@ -234,6 +234,7 @@ async function boot() {
   listenToOtherTabs();
   window.addEventListener('hashchange', route);
   route();
+  S.bootDone = true;
   updateModes();
   backfillArt();
   repairMatches().then(recleanNames).then(restoreTags).then(() => scanFolder()).then(identifyLibrary).then(() => fillGenres());
@@ -4432,3 +4433,40 @@ const ACT2 = {
 
 /* for checking things from the console */
 window.__fof = { growPlaylists, cleanupScan, runCleanup, undoCleanup, S, P };
+
+/* =====================================================================
+   Mac app: imports new songs from your folders in the background and
+   shows what's playing in the menu bar
+   ===================================================================== */
+const DESK = window.fofDesktop || null;
+if (DESK) {
+  document.documentElement.classList.add('desktop-app');
+  let busy = false;
+  DESK.onFiles(async list => {
+    if (busy) return;
+    busy = true;
+    try {
+      // wait until the library has loaded and any import in progress has finished
+      for (let i = 0; i < 120 && (IMP.running || !S.tracks.size && !S.bootDone); i++) await new Promise(r => setTimeout(r, 1000));
+      const seen = new Set(await kv.get('deskSeen', []));
+      const have = new Set([...S.tracks.values()].map(t => `${t.file || t.original?.file || ''}|${t.size || 0}`));
+      const key = f => `${f.name}|${f.size}|${f.mtime}`;
+      const fresh = list.filter(f => !seen.has(key(f)) && !have.has(`${f.name}|${f.size}`));
+      if (fresh.length) {
+        for (let i = 0; i < fresh.length; i += 100) {
+          const part = fresh.slice(i, i + 100);
+          const files = (await Promise.all(part.map(f => DESK.read(f.path).then(b => new File([b], f.name, { lastModified: f.mtime, type: '' })).catch(() => null)))).filter(Boolean);
+          if (files.length) await importFiles(files, { background: true });
+          await kv.set('deskSeen', [...new Set([...seen, ...part.map(key)])].slice(-30000)); part.forEach(f => seen.add(key(f)));
+        }
+        setTimeout(autoUpload, 3000);
+      }
+      await kv.set('deskSeen', [...new Set([...seen, ...list.map(key)])].slice(-30000));
+    } catch (e) { console.warn('mac import', e); }
+    busy = false;
+  });
+  DESK.onControl(a => { if (a === 'toggle') toggle(); else if (a === 'next') next(); else if (a === 'prev') prev(); else if (a === 'flow') flow(); });
+  const tell2 = () => { const t = current(); DESK.state({ title: t?.title || '', artist: t?.artist || '', playing: !engine.el.paused }); };
+  engine.el.addEventListener('play', tell2); engine.el.addEventListener('pause', tell2); engine.el.addEventListener('loadedmetadata', tell2);
+  setInterval(tell2, 5000);
+}
