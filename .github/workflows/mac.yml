@@ -61,3 +61,4 @@ jobs:
           R="${{ github.repository }}"
           gh release view mac -R "$R" >/dev/null 2>&1 || gh release create mac -R "$R" --title "Fof Music for Mac" --notes "Fof Music for Mac" --latest=false
           gh release upload mac FofMusic-mac.zip -R "$R" --clobber
+          [ -f shots/fof-smoke.png ] && gh release upload mac shots/fof-smoke.png -R "$R" --clobber || true
