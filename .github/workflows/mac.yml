@@ -40,11 +40,13 @@ jobs:
       - name: Try it
         working-directory: desktop
         run: |
+          mkdir -p "$HOME/Music/Fof Music Inbox" && python3 -c "import wave,struct;w=wave.open('$HOME/Music/Fof Music Inbox/test tone.wav','w');w.setnchannels(1);w.setsampwidth(2);w.setframerate(8000);w.writeframes(b''.join(struct.pack('<h',0) for _ in range(16000)));w.close()"
           FOF_SMOKE=1 "dist/mac-universal/Fof Music.app/Contents/MacOS/Fof Music" & PID=$!
           for i in $(seq 1 60); do [ -f /tmp/fof-smoke.txt ] && break; sleep 2; done
           kill $PID 2>/dev/null || true
           cat /tmp/fof-smoke.txt
           grep -q '"bridge":true' /tmp/fof-smoke.txt
+          grep -q '"file":"206 100 audio 2.0s"' /tmp/fof-smoke.txt
           mkdir -p shots && cp /tmp/fof-smoke.png shots/ || true
       - uses: actions/upload-artifact@v4
         if: always()

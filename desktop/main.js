@@ -2,7 +2,8 @@
 // - opens at login, quietly, and keeps playing when the window is closed
 // - imports new songs from your music folders in the background (no browser tab needed)
 // - menu bar mini player; the keyboard's play/pause/next keys work through macOS Now Playing
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, session } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, session, protocol } = require('electron');
+const { Readable } = require('stream');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
@@ -17,6 +18,25 @@ let win = null, tray = null, quitting = false, state = { title: '', artist: '', 
 let cfg = { folders: null, openAtLogin: true, showTitle: true };
 
 if (!app.requestSingleInstanceLock()) { app.quit(); }
+// songs already on this Mac play straight from your folders, with no internet needed
+protocol.registerSchemesAsPrivileged([{ scheme: 'fofile', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true } }]);
+const MIME = { mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', aif: 'audio/aiff', aiff: 'audio/aiff', alac: 'audio/mp4' };
+async function serveFile(req) {
+  const p = decodeURIComponent(new URL(req.url).pathname);
+  const okDir = folders().some(d => path.resolve(p).startsWith(path.resolve(d) + path.sep));
+  if (!okDir || !AUDIO.test(p)) return new Response('no', { status: 403 });
+  let st; try { st = await fsp.stat(p); } catch { return new Response('gone', { status: 404 }); }
+  const type = MIME[path.extname(p).slice(1).toLowerCase()] || 'application/octet-stream';
+  const base = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
+  const m = /bytes=(\d*)-(\d*)/.exec(req.headers.get('range') || '');
+  if (m) {
+    const start = m[1] ? +m[1] : Math.max(0, st.size - +m[2]);
+    const end = m[1] && m[2] ? Math.min(+m[2], st.size - 1) : st.size - 1;
+    if (start >= st.size) return new Response(null, { status: 416, headers: { ...base, 'Content-Range': `bytes */${st.size}` } });
+    return new Response(Readable.toWeb(fs.createReadStream(p, { start, end })), { status: 206, headers: { ...base, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': String(end - start + 1) } });
+  }
+  return new Response(Readable.toWeb(fs.createReadStream(p)), { status: 200, headers: { ...base, 'Content-Length': String(st.size) } });
+}
 app.on('second-instance', () => show());
 
 function loadCfg() { try { cfg = { ...cfg, ...JSON.parse(fs.readFileSync(CFG(), 'utf8')) }; } catch {} }
@@ -75,7 +95,7 @@ function createWindow(hidden) {
   win.loadURL(URL);
   win.webContents.on('did-finish-load', () => { ready = true; setTimeout(() => scan(true), 8000); });
   if (process.env.FOF_SMOKE) win.webContents.once('did-finish-load', () => setTimeout(async () => {
-    const r = await win.webContents.executeJavaScript(`(async () => JSON.stringify({ bridge: !!window.fofDesktop, view: document.querySelector('#view')?.children.length || 0, title: document.title, desktop: document.documentElement.classList.contains('desktop-app'), folders: await window.fofDesktop.folders() }))()`).catch(e => String(e));
+    const r = await win.webContents.executeJavaScript(`(async () => JSON.stringify({ bridge: !!window.fofDesktop, view: document.querySelector('#view')?.children.length || 0, title: document.title, desktop: document.documentElement.classList.contains('desktop-app'), folders: await window.fofDesktop.folders(), file: await (async () => { const f = (await window.fofDesktop.folders())[0]; if (!f) return 'no folder'; const u = 'fofile://local' + (f + '/test tone.wav').split('/').map(encodeURIComponent).join('/'); const r = await fetch(u, { headers: { Range: 'bytes=0-99' } }); const a = new Audio(u); const ok = await new Promise(res => { a.onloadedmetadata = () => res('audio ' + a.duration.toFixed(1) + 's'); a.onerror = () => res('audio error'); setTimeout(() => res('audio timeout'), 8000); }); return r.status + ' ' + (await r.arrayBuffer()).byteLength + ' ' + ok; })() }))()`).catch(e => String(e));
     const img = await win.webContents.capturePage();
     fs.writeFileSync('/tmp/fof-smoke.png', img.toPNG()); fs.writeFileSync('/tmp/fof-smoke.txt', r + '\ntray:' + !!tray);
     quitting = true; app.quit();
@@ -133,6 +153,7 @@ ipcMain.handle('read', async (_e, p) => {
   if (!ok) throw new Error('not in a watched folder');
   return fsp.readFile(p);
 });
+ipcMain.handle('exists', (_e, p) => folders().some(d => path.resolve(p).startsWith(path.resolve(d) + path.sep)) && fs.existsSync(p));
 ipcMain.handle('folders', () => folders());
 ipcMain.handle('add-folder', () => addFolder());
 ipcMain.on('scan-now', () => scan(true));
@@ -140,6 +161,7 @@ ipcMain.on('state', (_e, s) => { state = { ...state, ...s }; paintTray(); });
 
 app.whenReady().then(() => {
   loadCfg();
+  protocol.handle('fofile', serveFile);
   const hidden = process.argv.includes('--hidden') || app.getLoginItemSettings().wasOpenedAsHidden;
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(['media', 'clipboard-sanitized-write', 'notifications', 'fullscreen'].includes(perm)));
   tray = new Tray(trayImg());

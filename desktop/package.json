@@ -1,7 +1,7 @@
 {
   "name": "fof-music-mac",
   "productName": "Fof Music",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Fof Music for Mac: plays your library, imports new songs in the background, menu bar mini player.",
   "main": "main.js",
   "author": "Med Fofana",

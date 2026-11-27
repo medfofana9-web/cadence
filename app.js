@@ -211,7 +211,7 @@ async function boot() {
   S.quranSaved = await kv.get('quranSaved', []);
   CHECK.lists = await kv.get('playlistChecks', []);
   S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
-  S.cleanNoArt = await kv.get('cleanNoArt', []); S.qOff = await kv.get('qOff', {});
+  S.cleanNoArt = await kv.get('cleanNoArt', []); S.qOff = await kv.get('qOff', {}); S.offPaths = await kv.get('offPaths', {}); S.deskPaths = window.fofDesktop ? await kv.get('deskPaths', {}) : {};
   for (const [id, p] of pls) S.playlists.set(id, p);
   for (const [id, b] of arts) (id.startsWith('pl:') ? S.plCovers : S.art).set(id.replace(/^pl:/, ''), URL.createObjectURL(b));
   for (const [id, b] of thumbs) S.thumbs.set(id, URL.createObjectURL(b));
@@ -1746,6 +1746,8 @@ async function srcFor(t) {
     if (t.local) { const b = await db.get('audio', t.id); if (b) { if (!P.objUrls.has(t.id)) P.objUrls.set(t.id, URL.createObjectURL(b)); return P.objUrls.get(t.id); } }
     return (NATIVE ? t.url : t.url?.replace(/^http:/, 'https:')) || null;
   }
+  if (NATIVE && S.offPaths?.[t.id]?.path) return S.offPaths[t.id].path; // saved on this phone for offline
+  if (window.fofDesktop && S.deskPaths?.[t.id] && !t.local && await window.fofDesktop.exists(S.deskPaths[t.id]).catch(() => false)) return 'fofile://local' + S.deskPaths[t.id].split('/').map(encodeURIComponent).join('/'); // the file on this Mac
   if (!t.local && P.prefetchId === t.id && P.objUrls.has(t.id)) return P.objUrls.get(t.id); // downloaded ahead while the last song played
   const blob = t.local ? await db.get('audio', t.id) : null;
   if (blob) {
@@ -2627,29 +2629,53 @@ let uploading = false;
 function autoUpload() { return oneTab('upload', autoUploadNow); }
 /** On the phone: liked songs and your most played are kept on the device, so they play with no signal. */
 function autoOffline() { return oneTab('offline', autoOfflineNow); }
+const isOff = t => t.local || !!(NATIVE && S.offPaths?.[t.id]);
+const songExt = t => ((t.file || '').match(/\.(mp3|m4a|aac|flac|wav|ogg|opus|aiff?)$/i)?.[1] || 'mp3').toLowerCase();
+/** Drops phone copies the system cleared to free space, so they're saved again. */
+async function checkOffPaths() {
+  if (!NATIVE || !S.offPaths) return;
+  let gone = 0;
+  for (const [id, v] of Object.entries(S.offPaths)) {
+    const r = await NATIVE.hasFile({ name: v.name }).catch(() => null);
+    if (r && !r.path) { delete S.offPaths[id]; gone++; } else if (r?.path && r.path !== v.path) v.path = r.path;
+  }
+  if (gone) kv.set('offPaths', S.offPaths);
+}
 async function autoOfflineNow(manual = false) {
   if (!(IN_APP || IS_IOS) || !S.user || !navigator.onLine || downloading || S.settings.autoOffline === false) return;
   const o = offSet();
   if (o.wifiOnly && !onWifi()) { if (manual) toast('Waiting for Wi-Fi. Turn off “Only on Wi-Fi” to save now.'); return; }
   downloading = true;
   try {
-    const all = [...S.tracks.values()].filter(t => t.cloud);
-    const top = o.top ? all.filter(t => t.plays > 0).sort((a, b) => (b.plays || 0) - (a.plays || 0)).slice(0, o.top) : [];
+    await checkOffPaths();
+    const all = [...S.tracks.values()].filter(t => t.cloud && !t.ext);
+    const ranked = all.slice().sort((a, b) => (b.plays || 0) - (a.plays || 0) || (b.addedAt || 0) - (a.addedAt || 0));
+    const top = o.top < 0 ? ranked : o.top ? ranked.filter(t => t.plays > 0).slice(0, o.top) : [];
     const upnext = o.upnext ? P.queue.slice(P.idx + 1, P.idx + 11).map(id => T(id)).filter(t => t && t.cloud) : [];
-    const want = [...new Set([...upnext, ...(o.liked ? all.filter(t => t.liked) : []), ...top])].filter(t => !t.local);
-    const cap = o.limitGB * 1e9;
-    let used = [...S.tracks.values()].filter(t => t.local).reduce((x, t) => x + (t.size || (t.duration || 200) * 24000), 0);
-    let n = 0;
-    for (const t of want.slice(0, manual ? 400 : 60)) {
-      if (!navigator.onLine || current()?.id === t.id) continue;
-      const sz = t.size || (t.duration || 200) * 24000; if (used + sz > cap) break;
+    const want = [...new Set([...upnext, ...(o.liked ? all.filter(t => t.liked) : []), ...top])].filter(t => !isOff(t));
+    const cap = o.limitGB ? o.limitGB * 1e9 : Infinity;
+    let used = all.filter(isOff).reduce((x, t) => x + (t.size || (t.duration || 200) * 24000), 0);
+    let n = 0, fails = 0, i = 0;
+    const one = async t => {
+      const sz = t.size || (t.duration || 200) * 24000; if (used + sz > cap) return false;
+      if (!navigator.onLine || (o.wifiOnly && !onWifi()) || S.settings.autoOffline === false) return false;
       try {
-        const u = await cloud.fileUrl('audio/' + t.id, t.store === 'r2' || cloud.r2On()); if (!u) continue;
-        const b = await (await fetch(u)).blob(); if (!b.size) continue;
-        await db.put('audio', t.id, b); t.local = true; t.downloaded = true; t.autoSaved = true; await saveTrack(t, { sync: false }); used += b.size; n++;
-      } catch (e) { if (isQuotaError(e)) break; }
-    }
-    if (manual) toast(n ? `${count(n)} saved to this phone` : 'Everything you chose is already on this phone');
+        const u = await cloud.fileUrl('audio/' + t.id, t.store === 'r2' || cloud.r2On()); if (!u) return true;
+        if (NATIVE) {
+          const name = 'song-' + t.id + '.' + songExt(t);
+          const x = await NATIVE.download({ url: u, name }); if (!x?.path) return true;
+          S.offPaths[t.id] = { path: x.path, name, size: sz }; if (++n % 10 === 0) kv.set('offPaths', S.offPaths);
+        } else {
+          const b = await (await fetch(u)).blob(); if (!b.size) return true;
+          await db.put('audio', t.id, b); t.local = true; t.downloaded = true; t.autoSaved = true; await saveTrack(t, { sync: false }); n++;
+        }
+        used += sz; fails = 0; return true;
+      } catch (e) { if (isQuotaError(e)) return false; return ++fails < 5; }
+    };
+    // three at a time; stops at the space limit, when Wi-Fi drops, or after repeated failures (phone full)
+    await Promise.all([0, 1, 2].map(async () => { while (i < want.length) { const t = want[i++]; if (current()?.id === t.id && !NATIVE) continue; if (!(await one(t))) { i = want.length; break; } } }));
+    if (NATIVE) kv.set('offPaths', S.offPaths);
+    if (manual) toast(n ? `${count(n)} saved to this phone` : want.length ? 'Couldn’t save more right now' : 'Everything you chose is already on this phone');
   } finally { downloading = false; }
   if (o.podcasts) await podAutoSave().catch(() => {});
   await offlineQuran(o).catch(e => console.warn('quran offline', e));
@@ -4301,42 +4327,43 @@ VIEWS.cleanup = () => {
 /* =====================================================================
    Offline: what stays on this phone
    ===================================================================== */
-const OFF_DEF = { top: 100, liked: true, upnext: true, podcasts: true, quran: true, limitGB: 8, wifiOnly: true };
+const OFF_DEF = { top: -1, liked: true, upnext: true, podcasts: true, quran: true, limitGB: 0, wifiOnly: true };
 const offSet = () => ({ ...OFF_DEF, ...(S.settings.offline || {}) });
 async function setOff(k, v) { S.settings.offline = { ...offSet(), [k]: v }; await saveSettings(); render(); setTimeout(autoOffline, 800); }
 const onWifi = () => { const c = navigator.connection; if (!c || !c.type) return true; return c.type === 'wifi' || c.type === 'ethernet'; };
 async function storageUse() {
-  const songs = [...S.tracks.values()].filter(t => t.local);
+  const songs = [...S.tracks.values()].filter(isOff);
   const ext = [...S.ext.values()].filter(t => t.path || t.local);
   const est = (n, ts) => ts.reduce((x, t) => x + (t.size || (t.duration || 200) * 24000), 0);
-  const r = { music: est(0, songs), podcasts: est(0, ext.filter(t => t.kind === 'episode')), quran: est(0, ext.filter(t => t.kind === 'ayah' || t.kind === 'surahrec')), songs: songs.length, eps: ext.filter(t => t.kind === 'episode').length, free: null };
+  const lib = [...S.tracks.values()].filter(t => t.cloud || t.local);
+  const r = { libSize: est(0, lib), libN: lib.length, music: est(0, songs), podcasts: est(0, ext.filter(t => t.kind === 'episode')), quran: est(0, ext.filter(t => t.kind === 'ayah' || t.kind === 'surahrec')), songs: songs.length, eps: ext.filter(t => t.kind === 'episode').length, free: null };
   try { const e = await navigator.storage?.estimate?.(); if (e?.quota) r.free = Math.max(0, e.quota - e.usage); } catch {}
   return r;
 }
 VIEWS.offline = () => {
   const o = offSet(); const u = S.offUse; if (!u || Date.now() - (S.offUseAt || 0) > 15000) { S.offUseAt = Date.now(); storageUse().then(x => { S.offUse = x; if (S.route === 'offline') render(); }); }
-  const used = u ? u.music + u.podcasts + u.quran : 0, cap = o.limitGB * 1e9;
+  const used = u ? u.music + u.podcasts + u.quran : 0, cap = o.limitGB ? o.limitGB * 1e9 : Math.max(1, (u?.libSize || 0) + (u ? u.podcasts + u.quran : 0));
   const pct = x => Math.max(x ? .8 : 0, Math.min(100, x / cap * 100)).toFixed(1);
   const tg = (k, label, sub) => `<div class="set-row"><div class="lbl"><b>${label}</b><span>${sub}</span></div><button class="switch ${o[k] ? 'on' : ''}" role="switch" aria-checked="${!!o[k]}" data-action="off-set" data-id="${k}" aria-label="${label}"></button></div>`;
   const pick = (k, vals, fmtV) => `<div class="seg small">${vals.map(v => `<button class="${o[k] === v ? 'on' : ''}" data-action="off-pick" data-id="${k}" data-v="${v}">${fmtV(v)}</button>`).join('')}</div>`;
   const on = S.settings.autoOffline !== false;
   return `${back()}<div class="page-head"><div><div class="eyebrow">Settings</div><h1>Offline</h1><div class="lede">Choose what stays on this phone, so it plays with no signal.</div></div></div>
-    <section class="off-store"><div class="off-top"><b>${u ? bytes(used) : '…'}</b><span class="muted">of ${o.limitGB} GB${u?.free != null ? ` · ${bytes(u.free)} free on this phone` : ''}</span></div>
+    <section class="off-store"><div class="off-top"><b>${u ? bytes(used) : '…'}</b><span class="muted">${o.limitGB ? `of ${o.limitGB} GB` : u ? `${count(u.songs)} of ${count(u.libN)} on this phone` : ''}</span></div>
       <div class="off-bar"><i class="m" style="width:${u ? pct(u.music) : 0}%"></i><i class="p" style="width:${u ? pct(u.podcasts) : 0}%"></i><i class="q" style="width:${u ? pct(u.quran) : 0}%"></i></div>
       <div class="off-key"><span><i class="m"></i>Music ${u ? `· ${count(u.songs)}` : ''}</span><span><i class="p"></i>Podcasts ${u ? `· ${u.eps}` : ''}</span><span><i class="q"></i>Quran</span></div></section>
     <div class="settings-group">${sw('autoOffline', 'Keep music on this phone', 'Saves what you choose below and keeps it up to date')}</div>
     <div class="settings-group${on ? '' : ' dim'}">
-      <div class="set-row"><div class="lbl"><b>Your top songs</b><span>Your most played, kept fresh</span></div>${pick('top', [0, 50, 100, 250], v => v ? v : 'None')}</div>
+      <div class="set-row"><div class="lbl"><b>Songs</b><span>${o.top < 0 ? 'Your whole library, most played first' : 'Your most played, kept fresh'}</span></div>${pick('top', [-1, 250, 100, 0], v => v < 0 ? 'All' : v ? 'Top ' + v : 'None')}</div>
       ${tg('liked', 'Liked Songs', 'Every song you like')}
       ${tg('upnext', 'Up next', 'The next songs in your queue, saved ahead')}
       ${tg('podcasts', 'Podcasts', 'The newest episode of each show you follow')}
       ${tg('quran', 'Quran', 'The last 3 surahs you listened to')}
     </div>
     <div class="settings-group">
-      <div class="set-row"><div class="lbl"><b>Space limit</b><span>Stops saving new songs past this</span></div>${pick('limitGB', [2, 4, 8, 16, 32], v => v + ' GB')}</div>
+      <div class="set-row"><div class="lbl"><b>Space limit</b><span>Stops saving new songs past this</span></div>${pick('limitGB', [0, 32, 16, 8], v => v ? v + ' GB' : 'None')}</div>
       ${tg('wifiOnly', 'Only on Wi-Fi', 'Saves songs only when you’re on Wi-Fi')}
       <div class="set-row"><div class="lbl"><b>Save now</b><span>${downloading ? 'Saving…' : 'Runs on its own every 15 minutes'}</span></div><button class="btn" data-action="off-now">Save now</button></div>
-      <div class="set-row"><div class="lbl"><b>Remove songs saved on their own</b><span>Songs you saved yourself stay</span></div><button class="btn ghost" data-action="off-clear">Remove</button></div>
+      <div class="set-row"><div class="lbl"><b>Remove songs from this phone</b><span>Turns off “Keep music on this phone”. Songs you saved yourself stay.</span></div><button class="btn ghost" data-action="off-clear">Remove</button></div>
     </div>`;
 };
 /** Quran audio kept on the phone: { 'rid:n': { at, files: { id: path } } } for the last 3 surahs you played. */
@@ -4425,7 +4452,7 @@ const ACT2 = {
   'off-set': a => setOff(a.dataset.id, !offSet()[a.dataset.id]),
   'off-pick': a => setOff(a.dataset.id, +a.dataset.v),
   'off-now': () => { toast('Saving to this phone…'); return autoOfflineNow(true).then(() => { S.offUseAt = 0; render(); }); },
-  'off-clear': async () => { const ids = [...S.tracks.values()].filter(t => t.autoSaved && t.local).map(t => t.id); if (!ids.length) return toast('Nothing saved on its own'); await removeDownloads(ids); S.offUseAt = 0; render(); },
+  'off-clear': async () => { const ids = [...S.tracks.values()].filter(t => t.autoSaved && t.local).map(t => t.id); const paths = Object.entries(S.offPaths || {}); if (!ids.length && !paths.length) return toast('Nothing saved on its own'); S.settings.autoOffline = false; await saveSettings(); for (const [, v] of paths) await NATIVE?.removeFile({ name: v.name }).catch(() => {}); S.offPaths = {}; await kv.set('offPaths', {}); if (ids.length) await removeDownloads(ids); else toast(`Removed ${count(paths.length)} from this phone. They still stream.`); S.offUseAt = 0; render(); },
   'drive-exit': () => go(S.driveFrom && S.driveFrom !== 'drive' ? S.driveFrom : 'home'),
   'drive-pod': () => drivePod(),
   'drive-quran': () => S.quranSpot ? qResume() : qPlay(1),
@@ -4452,7 +4479,11 @@ if (DESK) {
       // your library has to arrive from the cloud first, so nothing already in it is added twice
       if (cloud.cloudConfigured() && (!S.user || !S.lastSync)) return;
       const seen = new Set(await kv.get('deskSeen', []));
-      const have = new Set([...S.tracks.values()].map(t => `${t.file || t.original?.file || ''}|${t.size || 0}`));
+      const byFile = new Map([...S.tracks.values()].map(t => [`${t.file || t.original?.file || ''}|${t.size || 0}`, t]));
+      const have = new Set(byFile.keys());
+      // songs already in your library that are also on this Mac play from the file, so they work with no internet
+      const paths = {}; for (const f of list) { const t = byFile.get(`${f.name}|${f.size}`); if (t) paths[t.id] = f.path; }
+      S.deskPaths = paths; kv.set('deskPaths', paths);
       const key = f => `${f.name}|${f.size}|${f.mtime}`;
       const fresh = list.filter(f => !seen.has(key(f)) && !have.has(`${f.name}|${f.size}`));
       if (fresh.length) {

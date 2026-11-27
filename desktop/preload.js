@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('fofDesktop', {
   onFiles: fn => ipcRenderer.on('files', (_e, list) => fn(list)),
   /** reads one song's bytes so the page can import it */
   read: path => ipcRenderer.invoke('read', path),
+  exists: path => ipcRenderer.invoke('exists', path),
   /** what's playing, for the menu bar */
   state: s => ipcRenderer.send('state', s),
   /** menu bar buttons: toggle / next / prev */
