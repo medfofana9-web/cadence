@@ -22,17 +22,24 @@ def kok(text, v, lang, speed=.9):
 paras = [p for p in direct(TEXT).split('\n') if p.strip()]
 refs = {}
 for tag, v, lang in [('American', 'am_onyx', 'a'), ('British', 'bm_lewis', 'b')]:
-    w = []
-    for p in paras: w += [kok(p, v, lang, .86), np.zeros(int(24000 * .9), np.float32)]
-    mp3(f'{tag} 2 - Current voice, tuned', np.concatenate(w), 24000)
     r = kok(REF, v, lang, .9); sf.write(f'/tmp/ref-{tag}.wav', r, 24000); refs[tag] = f'/tmp/ref-{tag}.wav'
-import torch
+# Matched to the measured style: natural pitch (no deepening), brisk phrases, frequent pauses (~0.7 s between
+# sentences, ~0.45 s at commas and colons, ~1.5 s between paragraphs), wide expressive range.
+NATURAL = ("equalizer=f=120:t=q:w=1:g=2.5,equalizer=f=3500:t=q:w=1.5:g=-1.5,equalizer=f=7000:t=q:w=2:g=1.5,"
+           "acompressor=threshold=-20dB:ratio=3:attack=8:release=120,aecho=0.8:0.85:28:0.1,loudnorm=I=-18:TP=-1.5")
 from chatterbox.tts import ChatterboxTTS
 m = ChatterboxTTS.from_pretrained(device='cpu')
+def phrases(p):  # split at sentence ends and at commas/colons/semicolons, keeping the punctuation
+    out = []
+    for sent in re.split(r'(?<=[.!?])\s+', p):
+        parts = re.split(r'(?<=[,:;])\s+', sent)
+        for k, ph in enumerate(parts): out.append((ph, 'sent' if k == len(parts) - 1 else 'comma'))
+    return out
 for tag in ['American', 'British']:
-    for label, ex, cfg in [('4 - New model', .45, .4), ('5 - New model, more dramatic', .7, .3)]:
-        m.prepare_conditionals(refs[tag], exaggeration=ex)
-        w = []
-        for p in paras:
-            w += [m.generate(p, exaggeration=ex, cfg_weight=cfg, temperature=.75).squeeze(0).numpy(), np.zeros(int(m.sr * .9), np.float32)]
-        mp3(f'{tag} {label}', np.concatenate(w), m.sr, STUDIO.replace('24000', str(m.sr)))
+    m.prepare_conditionals(refs[tag], exaggeration=.7)
+    w = [np.zeros(int(m.sr * .4), np.float32)]
+    for p in paras:
+        for ph, kind in phrases(p):
+            w += [m.generate(ph, exaggeration=.7, cfg_weight=.3, temperature=.75).squeeze(0).numpy(), np.zeros(int(m.sr * (.45 if kind == 'comma' else .7)), np.float32)]
+        w.append(np.zeros(int(m.sr * .8), np.float32))
+    mp3(f'{tag} 6 - Matched to his pacing', np.concatenate(w), m.sr, NATURAL)
