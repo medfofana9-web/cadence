@@ -1866,6 +1866,7 @@ async function loadTrack(id, { autoplay = true, quiet = false } = {}) {
   updateMediaSession(t);
   savePlayer();
   if ($('#now').classList.contains('open')) renderPanel();
+  if (S.route === 'feysal') render();
   return true;
 }
 async function playList(ids, start = 0, { shuffle = false, context = '', ctxRoute = '', mode = null, seed = null } = {}) {
