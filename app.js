@@ -198,28 +198,58 @@ const DEV = (() => {
   const name = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? 'iPad' : /Android/.test(ua) ? 'Android phone' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'PC' : 'other device';
   return { id, name };
 })();
+function playerSnapMine() { const r = S.remotePlayer; S.remotePlayer = null; const s = playerSnap(); S.remotePlayer = r; return s; }
 /** What's playing here, so another device can carry on from the same spot. */
 function playerSnap() {
   if (!P.queue.length || P.idx < 0) return S.remotePlayer || null;
   const lo = Math.max(0, P.idx - 200);
-  const mine = { queue: P.queue.slice(lo, lo + 500), idx: P.idx - lo, time: Math.round(spotNow()), at: P.activeAt || 0, dev: DEV.id, devName: DEV.name, shuffle: P.shuffle, repeat: P.repeat, context: P.context, contextRoute: P.contextRoute, mode: P.mode, seed: P.seed };
+  const mine = { queue: P.queue.slice(lo, lo + 500), idx: P.idx - lo, time: Math.round(spotNow()), playing: !engine.el.paused, sentAt: Date.now(), at: P.activeAt || 0, dev: DEV.id, devName: DEV.name, shuffle: P.shuffle, repeat: P.repeat, context: P.context, contextRoute: P.contextRoute, mode: P.mode, seed: P.seed };
   // never overwrite a newer spot from another device with an older one from here
   return (S.remotePlayer?.at || 0) > mine.at ? S.remotePlayer : mine;
 }
 /** Another device played more recently than this one: line up the same queue at the same spot, paused, ready to go. */
-async function adoptPlayer(r) {
+async function adoptPlayer(r, { live = false } = {}) {
   if (r?.dev !== DEV.id && (r?.at || 0) > (S.remotePlayer?.at || 0)) S.remotePlayer = r;
-  if (!r?.queue?.length || r.dev === DEV.id || (r.at || 0) <= (P.activeAt || 0) + 1000 || !engine.el.paused) return;
+  if (!r?.queue?.length || r.dev === DEV.id || !engine.el.paused) return;
+  if (!live && (r.at || 0) <= (P.activeAt || 0) + 1000) return;
   const curId = r.queue[r.idx]; if (!T(curId)) return;
-  if (current()?.id === curId && Math.abs(spotNow() - (r.time || 0)) < 4) { P.activeAt = r.at; savePlayer(true); return; } // already here
+  // still playing over there (or was, moments ago): carry on here at the same moment, playing
+  const play = !document.hidden && r.playing && (live || Date.now() - (r.sentAt || 0) < 3 * 60000);
+  const time = Math.max(0, (r.time || 0) + (play ? Math.max(0, Date.now() - (r.sentAt || Date.now())) / 1000 : 0));
+  const len = T(curId).duration || 0; const at0 = len && time > len - 3 ? Math.max(0, len - 3) : time;
+  const same = current()?.id === curId;
+  if (same && Math.abs(spotNow() - at0) < 4 && !play) { P.activeAt = r.at; savePlayer(true); return; } // already here
   const queue = r.queue.filter(id => T(id)), idx = queue.indexOf(curId);
-  Object.assign(P, { queue, idx, shuffle: !!r.shuffle, repeat: r.repeat || 'off', context: r.context || '', contextRoute: r.contextRoute || '', mode: r.mode || null, seed: r.seed || null, autoAdded: new Set(), activeAt: r.at, resumeId: curId, resumeAt: r.time || 0 });
-  const ok = await loadTrack(curId, { autoplay: false, quiet: true });
-  if (ok && r.time) seekWhenReady(r.time);
+  Object.assign(P, { queue, idx, shuffle: !!r.shuffle, repeat: r.repeat || 'off', context: r.context || '', contextRoute: r.contextRoute || '', mode: r.mode || null, seed: r.seed || null, autoAdded: new Set(), activeAt: r.at, resumeId: curId, resumeAt: at0 });
+  const ok = same ? true : await loadTrack(curId, { autoplay: play, quiet: true });
+  if (ok && same) { try { engine.el.currentTime = at0; } catch {} if (play) engine.el.play()?.catch?.(() => {}); }
+  else if (ok && at0 && !play) seekWhenReady(at0);
   P.activeAt = r.at; savePlayer(true); paintTime();
   if (P.panel === 'queue') renderQueue();
   if (S.route === 'home') render();
-  toast(`Picked up from your ${r.devName || 'other device'}: ${T(curId).title}${r.time > 5 ? ' at ' + fmt(r.time) : ''}`);
+  const from = r.devName || 'other device', title = T(curId).title;
+  if (!play) return toast(`Picked up from your ${from}: ${title}${at0 > 5 ? ' at ' + fmt(at0) : ''}`);
+  // a browser may refuse to start sound until you tap once: offer the button
+  setTimeout(() => { if (engine.el.paused && current()?.id === curId) toast(`Continue “${title}” from your ${from}?`, ['Play here', () => engine.el.play()]); else toast(`Continuing from your ${from}`); }, 1500);
+}
+
+/* Live link: the device you're using plays; the others step aside */
+const LIVE = { on: false, starting: false, helloAt: 0 };
+async function liveStart() {
+  if (!S.user || LIVE.on || LIVE.starting) return;
+  LIVE.starting = true;
+  try { LIVE.on = await cloud.live(onLive); } catch { LIVE.on = false; }
+  LIVE.starting = false;
+  if (LIVE.on) liveHello(); else setTimeout(liveStart, 60000);
+}
+function liveSay(t) { if (LIVE.on) cloud.liveSend({ t, dev: DEV.id, devName: DEV.name, snap: playerSnapMine() }); }
+/** Opening the app here: ask whether another device is playing right now. */
+function liveHello() { if (!LIVE.on || document.hidden) return; LIVE.helloAt = Date.now(); liveSay('hello'); }
+function onLive(m) {
+  if (!m || m.dev === DEV.id) return;
+  if (m.t === 'hello') { if (!engine.el.paused) liveSay('state'); return; }
+  if (m.t === 'take') { if (!engine.el.paused) { engine.el.pause(); toast(`Now playing on your ${m.devName || 'other device'}`); } return; }
+  if (m.t === 'state' && m.snap?.playing && Date.now() - LIVE.helloAt < 8000 && engine.el.paused && !document.hidden) { LIVE.helloAt = 0; adoptPlayer(m.snap, { live: true }); }
 }
 let pullingLight = false;
 /** A quick check for where you left off elsewhere, when you come back to the app. */
@@ -294,8 +324,8 @@ async function boot() {
   // songs that couldn't upload earlier (bad Wi-Fi, signed out) go up on their own
   setInterval(() => autoUpload(), 5 * 60 * 1000);
   setTimeout(autoOffline, 20000); setInterval(autoOffline, 15 * 60 * 1000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkVersion(); if (S.folder && Date.now() - (S.lastScan || 0) > 30000) scanFolder(); if (S.user && Date.now() - S.lastSync > 60000) syncDown(); else pullLight(); } else { flushListen(); savePlayer(true); queueStatePush(true); } });
-  addEventListener('focus', () => pullLight());
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkVersion(); if (S.folder && Date.now() - (S.lastScan || 0) > 30000) scanFolder(); liveHello(); if (S.user && Date.now() - S.lastSync > 60000) syncDown(); else pullLight(); } else { flushListen(); savePlayer(true); queueStatePush(true); } });
+  addEventListener('focus', () => { liveHello(); pullLight(); });
   window.addEventListener('online', () => { if (S.user) { syncDown(); setTimeout(autoUpload, 5000); } });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (IN_APP) { renewReminder(); siriHooks(); }
@@ -377,6 +407,7 @@ async function syncDown() {
     }
     const st = await cloud.pullState();
     if (st?.data) mergeState(st.data);
+    liveStart();
     const firstSync = !S.lastSync; S.lastSync = Date.now();
     if (firstSync && window.fofDesktop) setTimeout(() => window.fofDesktop.scanNow(), 3000);
     queueStatePush();
@@ -2094,7 +2125,7 @@ for (const el of engine.all) {
   el.addEventListener('timeupdate', mine(onTime));
   el.addEventListener('loadedmetadata', mine(() => { const t = current(); if (t && isFinite(el.duration) && (!t.duration || Math.abs(t.duration - el.duration) > 2)) { t.duration = el.duration; saveTrack(t, { sync: false }); } onTime(); }));
   el.addEventListener('play', mine(() => { P.tick = 0; updatePlayIcons(); }));
-  el.addEventListener('playing', mine(() => { P.isPlaying = true; P.activeAt = Date.now(); }));
+  el.addEventListener('playing', mine(() => { if (!P.isPlaying) liveSay('take'); P.isPlaying = true; P.activeAt = Date.now(); }));
   // iPhone ignores a jump made before a song starts loading; make it once playback begins
   el.addEventListener('playing', mine(() => { if (P.resumeAt && current()?.id === P.resumeId) { const at = P.resumeAt; P.resumeAt = 0; P.resumeId = null; if (Math.abs(el.currentTime - at) > 2 && (!el.duration || at < el.duration - 1)) el.currentTime = at; } }));
   el.addEventListener('pause', mine(() => { P.tick = 0; if (P.isPlaying) { P.isPlaying = false; P.activeAt = Date.now(); queueStatePush(); } updatePlayIcons(); savePlayer(); }));
