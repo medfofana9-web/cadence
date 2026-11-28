@@ -1,0 +1,39 @@
+name: Audiobook narrator test (Mac)
+on:
+  push:
+    branches: [audiobooks]
+    paths: ['tools/audiobook/**', 'desktop/narrator.js', '.github/workflows/narrator-test.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv the way the Mac app does
+        run: |
+          mkdir -p n && curl -sL https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-apple-darwin.tar.gz | tar -xz -C n --strip-components=1
+          cp tools/audiobook/*.py n/ && python3 n/make_test_epub.py n/test.epub
+      - name: Narrate with both voices, exactly as the Mac app runs it
+        run: |
+          for V in am_onyx bm_lewis; do
+            ARGS=$(node -e "const p=require('./desktop/narrator.js');" 2>/dev/null; node -e "
+              const Module=require('module');const orig=Module._load;Module._load=(r,...a)=>r==='electron'?{app:{getPath:()=>'/tmp'}}:orig(r,...a);
+              const n=require('./desktop/narrator.js');console.log(JSON.stringify(n.PKGS('kokoro')))")
+            echo "$ARGS"
+            node -e "
+              const {spawnSync}=require('child_process');const pk=JSON.parse(process.argv[1]);
+              const a=['run','--python','3.11',...pk.flatMap(p=>['--with',p]),'n/narrate.py','n/test.epub','out-$V','--engine','kokoro','--voice','$V'];
+              const r=spawnSync('n/uv',a,{stdio:'inherit',env:{...process.env,UV_CACHE_DIR:'/tmp/uvc',PYTORCH_ENABLE_MPS_FALLBACK:'1',PATH:'n:/usr/bin:/bin:/usr/sbin:/sbin'}});process.exit(r.status)" "$ARGS"
+          done
+          find out-* -type f | sort
+          ls out-am_onyx/*/*.mp3 out-bm_lewis/*/*.mp3
+      - uses: actions/upload-artifact@v4
+        with: { name: narrated, path: 'out-*' }
+      - name: Save results to a branch
+        run: |
+          mkdir /tmp/r && cp -R out-* /tmp/r/
+          git config user.name fof-bot; git config user.email bot@users.noreply.github.com
+          git checkout --orphan narrator-test-out; git rm -rfq .; cp -R /tmp/r/* .; git add -A; git commit -qm "Narrator test"; git push -f origin narrator-test-out

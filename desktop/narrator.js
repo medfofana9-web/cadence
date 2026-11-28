@@ -18,7 +18,11 @@ const BOOK = /\.(epub|pdf)$/i;
 const SITE = 'https://medfofana9-web.github.io/cadence/';
 const dir = () => path.join(app.getPath('userData'), 'narrator');
 const BASE = ['soundfile', 'mutagen', 'imageio-ffmpeg', 'beautifulsoup4', 'lxml', 'pymupdf'];
-const PKGS = engine => [...(engine === 'kokoro' ? ['kokoro', 'misaki[en]'] : ['chatterbox-tts==0.1.7']), ...BASE];
+const SPACY = 'en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl';
+const PKGS = engine => [...(engine === 'kokoro' ? ['kokoro>=0.9.4', 'misaki[en]>=0.9.4', SPACY] : ['chatterbox-tts==0.1.7']), ...BASE];
+/** The two narrators you picked: deep American (default) and deep British. */
+const VOICES = { american: { label: 'Deep American voice', engine: 'kokoro', voice: 'am_onyx' }, british: { label: 'Deep British voice', engine: 'kokoro', voice: 'bm_lewis' } };
+const pick = f => { try { const k = fs.readFileSync(f + '.voice', 'utf8').trim(); return VOICES[k] ? k : 'american'; } catch { return 'american'; } };
 
 let status = { busy: false, line: '', book: '' }, onChange = () => {}, child = null, timer = null, blocker = null;
 const set = s => { status = { ...status, ...s }; onChange(status); };
@@ -50,13 +54,9 @@ async function uv() {
 }
 /** The narration scripts come from the live site, so improvements arrive without reinstalling the Mac app. */
 async function scripts() {
-  for (const f of ['narrate.py', 'epub_text.py', 'voice.json']) {
-    try { await get(`${SITE}tools/audiobook/${f}?t=${Date.now()}`, path.join(dir(), f)); } catch (e) { if (!fs.existsSync(path.join(dir(), f)) && f !== 'voice.json') throw e; }
+  for (const f of ['narrate.py', 'epub_text.py']) {
+    try { await get(`${SITE}tools/audiobook/${f}?t=${Date.now()}`, path.join(dir(), f)); } catch (e) { if (!fs.existsSync(path.join(dir(), f))) throw e; }
   }
-  let v = { engine: 'chatterbox', voice: 'default' };
-  try { v = { ...v, ...JSON.parse(fs.readFileSync(path.join(dir(), 'voice.json'), 'utf8')) }; } catch {}
-  if (v.ref) { try { await get(`${SITE}tools/audiobook/refs/${v.ref}`, path.join(dir(), 'refs', v.ref)); v.voice = path.join(dir(), 'refs', v.ref); } catch {} }
-  return v;
 }
 
 async function nextBook() {
@@ -78,7 +78,7 @@ async function run() {
   blocker = powerSaveBlocker.start('prevent-app-suspension');
   try {
     fs.mkdirSync(path.join(dir(), 'refs'), { recursive: true }); fs.mkdirSync(OUT, { recursive: true });
-    const bin = await uv(), v = await scripts();
+    const bin = await uv(); await scripts(); const v = VOICES[pick(b.p)];
     log(`start ${b.n} with ${v.engine}/${v.voice}`);
     const args = ['run', '--quiet', '--python', '3.11', ...PKGS(v.engine).flatMap(p => ['--with', p]), path.join(dir(), 'narrate.py'), b.p, OUT, '--engine', v.engine, '--voice', v.voice];
     const code = await new Promise(res => {
@@ -102,7 +102,7 @@ async function run() {
     child = null;
     if (code === 0) {
       fs.mkdirSync(DONE, { recursive: true });
-      await fsp.rename(b.p, path.join(DONE, b.n)).catch(() => {});
+      await fsp.rename(b.p, path.join(DONE, b.n)).catch(() => {}); await fsp.unlink(b.p + '.voice').catch(() => {});
       try { new Notification({ title: 'Audiobook ready', body: `${status.book} is in Fof Music.` }).show(); } catch {}
       log(`done ${b.n}`);
     } else if (code !== null) {
@@ -121,8 +121,11 @@ async function run() {
 async function addBook(win) {
   const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], message: 'Pick a book to turn into an audiobook', filters: [{ name: 'Books', extensions: ['epub', 'pdf'] }] });
   if (r.canceled || !r.filePaths.length) return null;
+  const ask = await dialog.showMessageBox(win, { type: 'question', message: 'Which voice should read it?', buttons: [VOICES.american.label, VOICES.british.label, 'Cancel'], defaultId: 0, cancelId: 2 });
+  if (ask.response === 2) return null;
+  const voice = ask.response === 1 ? 'british' : 'american';
   fs.mkdirSync(BOOKS, { recursive: true });
-  for (const f of r.filePaths) await fsp.copyFile(f, path.join(BOOKS, path.basename(f)));
+  for (const f of r.filePaths) { const dest = path.join(BOOKS, path.basename(f)); await fsp.writeFile(dest + '.voice', voice); await fsp.copyFile(f, dest); }
   setTimeout(run, 6000);
   return r.filePaths.map(f => path.basename(f).replace(BOOK, '').replace(/\s*\(z-lib.*\)$/i, '')).join(', ');
 }
@@ -136,4 +139,4 @@ function start(cb) {
 }
 function stop() { if (child) try { child.kill(); } catch {} }
 
-module.exports = { start, stop, addBook, status: () => status, BOOKS, OUT };
+module.exports = { start, stop, addBook, status: () => status, BOOKS, OUT, PKGS, VOICES };

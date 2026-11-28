@@ -48,7 +48,7 @@ class Kokoro:
         self.voice = voice or 'am_onyx'
         self.p = KPipeline(lang_code=self.voice[0])
     def __call__(self, text):
-        return np.concatenate([a.numpy() if hasattr(a, 'numpy') else a for _, _, a in self.p(text, voice=self.voice, speed=0.95)])
+        return np.concatenate([a.numpy() if hasattr(a, 'numpy') else a for _, _, a in self.p(text, voice=self.voice, speed=0.92)])
 
 
 class Chatterbox:
