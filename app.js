@@ -3473,7 +3473,7 @@ async function ttsFrom(i) {
     if (my !== TTS.n || !TTS.on) return;
     if (k >= s.length) { const ch = rdList(t), n = ch.findIndex(c => c.id === t.id); if (ch[n + 1]) { RD.id = ch[n + 1].id; paintReader(); setTimeout(() => ttsFrom(0), 300); } else ttsStop(); return; }
     rdFollow(0, false, k);
-    const a = await gen(k); gen(k + 1); gen(k + 2);
+    const a = await gen(k); for (let q = 1; q <= 4; q++) gen(k + q);
     if (my !== TTS.n || !TTS.on) return;
     if (!a) return play(k + 1);
     const buf = AC.createBuffer(1, a.samples.length, a.rate); buf.copyToChannel(a.samples, 0);
