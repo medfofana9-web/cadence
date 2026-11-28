@@ -50,12 +50,16 @@ def para_audio(p, ex, cfg):
     out = []
     for c in chunks: out += [trim(m.generate(c, exaggeration=ex, cfg_weight=cfg, temperature=.8).squeeze(0).numpy(), m.sr), np.zeros(int(m.sr * .35), np.float32)]
     return out
+# Version 10: Poe-style pacing measured from the clip he sent - brisker words (about 6 syllables a second, up from 5),
+# but more and longer breaths between ideas (speech only ~60% of the time), and a wider rise and fall.
+def para10(p):
+    out = []
+    for sent in re.split(r'(?<=[.!?])\s+', p):
+        if not sent.strip(): continue
+        out += [trim(m.generate(sent, exaggeration=1.0, cfg_weight=.4, temperature=.8).squeeze(0).numpy(), m.sr), np.zeros(int(m.sr * .8), np.float32)]
+    return out
 for tag in ['American', 'British']:
-    m.prepare_conditionals(refs[tag], exaggeration=.8)
+    m.prepare_conditionals(refs[tag], exaggeration=1.0)
     w = [np.zeros(int(m.sr * .3), np.float32)]
-    for p in paras: w += para_audio(p, .8, .5) + [np.zeros(int(m.sr * .55), np.float32)]
-    mp3(f'{tag} 8 - Fluent, our voice', np.concatenate(w), m.sr, 'atempo=1.04,' + NATURAL)
-m = ChatterboxTTS.from_pretrained(device='cpu')            # fresh model = its built-in voice
-w = [np.zeros(int(m.sr * .3), np.float32)]
-for p in paras: w += para_audio(p, .75, .5) + [np.zeros(int(m.sr * .55), np.float32)]
-mp3('American 9 - Fluent, natural voice', np.concatenate(w), m.sr, f'asetrate={m.sr}*0.8,aresample={m.sr},atempo=1.25,atempo=1.0,' + NATURAL)
+    for p in paras: w += para10(p) + [np.zeros(int(m.sr * 1.0), np.float32)]
+    mp3(f'{tag} 10 - Poe pacing, our voice', np.concatenate(w), m.sr, 'atempo=1.2,' + NATURAL)
