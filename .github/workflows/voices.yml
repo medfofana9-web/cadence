@@ -2,7 +2,7 @@ name: Audiobook voice samples
 on:
   push:
     branches: [audiobook-voices]
-    paths: ['tools/audiobook/**', '.github/workflows/voices.yml']
+    paths: ['tools/audiobook/samples.py', '.github/workflows/voices.yml']
   workflow_dispatch:
 permissions:
   contents: write

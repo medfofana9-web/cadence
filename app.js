@@ -77,7 +77,9 @@ const hours = s => { const h = s / 3600; return h >= 1 ? `${h.toFixed(h >= 10 ? 
 const bytes = n => n > 1e9 ? (n / 1e9).toFixed(1) + ' GB' : (n / 1e6).toFixed(0) + ' MB';
 
 /** Every song the app should show (respects “Hide explicit songs”). */
-const visible = () => [...S.tracks.values()].filter(t => !(S.settings.hideExplicit && t.explicit));
+const visible = () => [...S.tracks.values()].filter(t => t.category !== 'Audiobooks' && !(S.settings.hideExplicit && t.explicit));
+/** Audiobooks: chapters are library files tagged “Audiobook”; album = book, artist = author. */
+const isBook = t => !!t && t.category === 'Audiobooks';
 const byAdded = (a, b) => (b.addedAt || 0) - (a.addedAt || 0);
 
 let toastT;
@@ -527,7 +529,7 @@ function route(ev) {
   const i = h.indexOf('/');
   S.route = i < 0 ? h : h.slice(0, i);
   S.param = i < 0 ? '' : h.slice(i + 1);
-  const libRoutes = ['songs', 'artists', 'albums', 'liked', 'playlist', 'artist', 'album', 'library', 'smart', 'insights', 'duplicates', 'history', 'replay', 'import', 'dz-artist', 'dz-album'];
+  const libRoutes = ['books', 'book', 'songs', 'artists', 'albums', 'liked', 'playlist', 'artist', 'album', 'library', 'smart', 'insights', 'duplicates', 'history', 'replay', 'import', 'dz-artist', 'dz-album'];
   $$('[data-route]').forEach(a => {
     const r = a.dataset.route;
     a.classList.toggle('active', r === S.route || (r === 'library' && libRoutes.includes(S.route)) || (r === 'podcasts' && ['show', 'topic'].includes(S.route)) || (r === 'quran' && ['feysal', 'reciters'].includes(S.route)));
@@ -1224,7 +1226,7 @@ VIEWS.library = () => {
   const row = (href, icon, label, n) => `<a class="lib-row" href="#/${href}"><svg><use href="#i-${icon}"/></svg><span>${label}</span><span class="muted">${n ?? ''}</span><svg class="chev"><use href="#i-back"/></svg></a>`;
   const smarts = Object.entries(SMART).filter(([, d]) => !d.moment).map(([k, d]) => [k, d, d.get(visible())]).filter(x => x[2].length);
   return `<div class="page-head"><h1>Library</h1><a class="icon-btn" href="#/settings" aria-label="Settings"><svg><use href="#i-gear"/></svg></a></div>
-    <div class="lib-rows">${row('songs', 'note', 'Songs', visible().length)}${row('artists', 'mic', 'Artists', groups('creditedArtist').size)}${row('albums', 'album', 'Albums', groups('album').size)}${row('liked', 'heart', 'Liked Songs', visible().filter(t => t.liked).length)}${S.log.length ? row('replay', 'spark', 'Replay ' + new Date().getFullYear(), '') + row('insights', 'chart', 'Your listening', '') : ''}${row('import', 'upload', 'Add music', '')}${row('cleanup', 'check', 'Clean Up', cleanupCount() || '')}${reviewList().length ? row('review', 'check', 'Check these', reviewList().length) : ''}</div>
+    <div class="lib-rows">${row('books', 'book', 'Audiobooks', books().size || '')}${row('songs', 'note', 'Songs', visible().length)}${row('artists', 'mic', 'Artists', groups('creditedArtist').size)}${row('albums', 'album', 'Albums', groups('album').size)}${row('liked', 'heart', 'Liked Songs', visible().filter(t => t.liked).length)}${S.log.length ? row('replay', 'spark', 'Replay ' + new Date().getFullYear(), '') + row('insights', 'chart', 'Your listening', '') : ''}${row('import', 'upload', 'Add music', '')}${row('cleanup', 'check', 'Clean Up', cleanupCount() || '')}${reviewList().length ? row('review', 'check', 'Check these', reviewList().length) : ''}</div>
     ${momentShelf()}
     <section class="section"><div class="section-head"><h2>Playlists</h2><div class="row-actions"><a class="see-all" data-action="pick-playlists">Import from Apple Music</a><a class="see-all" data-action="new-playlist">New playlist</a></div></div>
     ${pls.length ? `<div class="grid">${pls.map(p => collCard({ href: 'playlist/' + p.id, title: p.name, sub: count(p.tracks.length), tracks: p.tracks.map(id => T(id)).filter(Boolean), img: S.plCovers.get(p.id) })).join('')}</div>` : '<p class="muted">No playlists yet.</p>'}</section>
@@ -1894,6 +1896,7 @@ async function loadTrack(id, { autoplay = true, quiet = false } = {}) {
     return false;
   }
   P.preloadFor = null; P.fadeStarted = false; P.counted = false; P.lyrics = null; P.lyricLine = -1; P.follow = true; if (P.resumeId !== id) { P.resumeAt = 0; P.resumeId = null; }
+  if (isBook(t)) { const pr = S.pod.prog[t.id]; if (pr && !pr.done && pr.t > 5) { P.resumeAt = pr.t; P.resumeId = t.id; } bookSpeed(true); } else if (P.bookRate) bookSpeed(false);
   if (t.kind === 'episode') { const pr = S.pod.prog[t.id]; if (pr && !pr.done && pr.t > 5) { P.resumeAt = pr.t; P.resumeId = t.id; } }
   paintNow(t);
   try { await engine.load(src, { gainDb: gainFor(t), autoplay }); }
@@ -1927,7 +1930,7 @@ function peekNext() {
   if (!P.queue.length) return null;
   if (P.idx + 1 < P.queue.length) return { id: P.queue[P.idx + 1], idx: P.idx + 1 };
   if (P.repeat === 'all') return { id: P.queue[0], idx: 0 };
-  if (current()?.ext) return null; // a podcast or recitation ends where it ends
+  if (current()?.ext || isBook(current())) return null; // a podcast, recitation or book ends where it ends
   let more = [];
   if (P.mode === 'flow') more = flowPicks(15);
   else if (P.mode === 'radio') more = similar([T(P.seed), current()].filter(Boolean), 15);
@@ -2008,7 +2011,8 @@ function paintNow(t) {
   $('#now-title').textContent = t.title; $('#now-artist').textContent = t.artist;
   $('#now-mini-title').textContent = t.title; $('#now-mini-artist').textContent = t.artist; $('#now-mini-art').src = artOf(t);
   if (t.ext) delete $('#now-artist').dataset.action; else $('#now-artist').dataset.action = 'artist-more';
-  $('#now-artist').href = t.kind === 'yt' ? '#/feysal/' + t.albumKey : t.kind === 'episode' ? '#/show/' + t.showId : t.kind === 'ayah' ? '#/quran/' + t.surah : '#/artist/' + encodeURIComponent(mainArtist(t.artist));
+  document.body.classList.toggle('book-mode', isBook(t));
+  $('#now-artist').href = isBook(t) ? '#/book/' + encodeURIComponent(bookKey(t)) : t.kind === 'yt' ? '#/feysal/' + t.albumKey : t.kind === 'episode' ? '#/show/' + t.showId : t.kind === 'ayah' ? '#/quran/' + t.surah : '#/artist/' + encodeURIComponent(mainArtist(t.artist));
   $('#now-from').textContent = P.mode === 'flow' ? 'Fof Flow' : P.context ? 'Playing from ' + P.context : '';
   ['#p-like', '#now-like'].forEach(s => $(s).classList.toggle('on', !!t.liked));
   document.title = `${t.title} · ${t.artist}`;
@@ -2063,6 +2067,8 @@ function updatePlayIcons() {
   $('#now').classList.toggle('paused', paused);
   document.body.classList.toggle('is-paused', paused);
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = paused ? 'paused' : 'playing';
+  if (S.route === 'books' || S.route === 'book') { clearTimeout(updatePlayIcons.t); updatePlayIcons.t = setTimeout(render, 120); }
+  if (isBook(current()) && P.panel === 'lyrics' && $('#now').classList.contains('open')) renderPanel();
 }
 function updateModes() {
   ['#p-shuffle', '#now-shuffle'].forEach(s => { $(s).classList.toggle('on', P.shuffle); $(s).setAttribute('aria-pressed', P.shuffle); });
@@ -2113,8 +2119,8 @@ function onTime() {
   if (!engine.dual && c > 4 && !el.paused && navigator.onLine) prefetchNext();
   // gapless / crossfade: buffer the next song near the end, then switch
   const remain = d - c;
-  const cf = engine.dual && !current()?.ext ? (S.settings.crossfade || (P.mode === 'flow' && S.settings.flowBlend !== false ? 6 : 0)) : 0;
-  if (engine.dual && (S.settings.gapless || cf) && d && remain < Math.max(cf + 10, 15) && P.repeat !== 'one' && !P.sleepEnd && !el.paused) {
+  const cf = engine.dual && !current()?.ext && !isBook(current()) ? (S.settings.crossfade || (P.mode === 'flow' && S.settings.flowBlend !== false ? 6 : 0)) : 0;
+  if (engine.dual && (S.settings.gapless || cf) && !isBook(current()) && d && remain < Math.max(cf + 10, 15) && P.repeat !== 'one' && !P.sleepEnd && !el.paused) {
     const n = peekNext();
     if (n && P.preloadFor !== n.id) {
       P.preloadFor = n.id; const nt = T(n.id);
@@ -2124,6 +2130,7 @@ function onTime() {
   }
   if (Math.floor(c) % 5 === 0) savePlayer();
   if (t?.kind === 'episode' && d && !el.paused && Math.floor(c) % 5 === 0) podProgress(t, c, d);
+  if (isBook(t) && d && !el.paused && Math.floor(c) % 5 === 0) bookProgress(t, c, d);
   if ('mediaSession' in navigator && d && isFinite(d)) { try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(c, d), playbackRate: el.playbackRate || 1 }); } catch {} }
 }
 for (const el of engine.all) {
@@ -2139,7 +2146,7 @@ for (const el of engine.all) {
   el.addEventListener('playing', mine(() => $('#player').classList.remove('buffering')));
   el.addEventListener('ended', mine(() => {
     if (P.mem && current()?.kind === 'ayah') { memStep(); return; }
-    { const t = current(); if (t?.kind === 'episode') podProgress(t, el.duration, el.duration); }
+    { const t = current(); if (t?.kind === 'episode') podProgress(t, el.duration, el.duration); if (isBook(t)) bookProgress(t, el.duration, el.duration); }
     if (P.sleepEnd) { clearSleep(); toast('Sleep timer ended'); return; }
     if (P.repeat === 'one') return next(true);
     if (P.preloadFor && engine.hasSpare(P.preloadFor)) return advanceTo(P.preloadFor, 0);
@@ -2320,7 +2327,7 @@ function sleepMenu(e) {
 }
 function setSleep(m) { P.sleepEnd = false; P.sleepAt = Date.now() + m * 60000; $('#sleep-btn').classList.add('on'); toast(`Music stops in ${m < 60 ? m + ' minutes' : '1 hour'}`); }
 const SPEEDS = [1, 1.25, 1.5, 2, .75];
-function cycleSpeed() { P.speed = SPEEDS[(SPEEDS.indexOf(P.speed) + 1) % SPEEDS.length]; engine.setRate(P.speed); $('#speed-btn').textContent = P.speed + '×'; $('#speed-btn').classList.toggle('on', P.speed !== 1); }
+function cycleSpeed() { P.speed = SPEEDS[(SPEEDS.indexOf(P.speed) + 1) % SPEEDS.length]; engine.setRate(P.speed); if (isBook(current())) { P.bookRate = true; S.settings.bookSpeed = P.speed; saveSettings(); } $('#speed-btn').textContent = P.speed + '×'; $('#speed-btn').classList.toggle('on', P.speed !== 1); }
 
 /* =====================================================================
    Now playing: lyrics and queue
@@ -2382,6 +2389,7 @@ async function renderPanel() {
     box.innerHTML = a ? `<div class="lyrics q-now"><p class="q-now-ar" dir="rtl" lang="ar">${esc(a.ar)}</p><p class="q-now-en">${esc(a.en)}</p><div class="lyrics-credit">Translation: Saheeh International</div></div>` : '';
     $('#lyrics-return').hidden = true; return;
   }
+  if (isBook(t)) { box.innerHTML = chapterPanel(t); $('#lyrics-return').hidden = true; return; }
   if (t.kind === 'episode') { box.innerHTML = `<div class="lyrics plain pod-notes"><h3>${esc(t.title)}</h3><p>${esc((t.about || '').replace(/<[^>]+>/g, ' ')) || 'No show notes.'}</p></div>`; $('#lyrics-return').hidden = true; return; }
   if (!P.lyrics || P.lyrics.id !== t.id) {
     box.innerHTML = `<div class="lyrics-skel">${'<i></i>'.repeat(6)}</div>`;
@@ -2895,6 +2903,10 @@ document.addEventListener('click', async e => {
     switch (a.dataset.action) {
       case 'noop': return;
       case 'pod-play': return podPlay(id);
+      case 'book-play': return bookPlay(a.dataset.book, id);
+      case 'skip-back': { const el = engine.el; el.currentTime = Math.max(0, el.currentTime - 15); return; }
+      case 'skip-fwd': { const el = engine.el; el.currentTime = Math.min((el.duration || 1e9) - 1, el.currentTime + 30); return; }
+      case 'book-restart': return bookRestart(a.dataset.book);
       case 'artist-more': e.preventDefault(); return artistSheet();
       case 'want': { e.stopPropagation(); try { return toggleWant(JSON.parse(a.dataset.w)); } catch { return; } }
       case 'want-x': { e.stopPropagation(); S.want = wants().filter(w => w.key !== a.dataset.key || w.arrived); saveWant(); updateAddTabs(); return render(); }
@@ -3234,6 +3246,106 @@ function upCard(ep) {
   return `<div class="pod-up" data-action="pod-play" data-id="${esc(ep.id)}"><div class="pod-up-art"><img loading="lazy" src="${esc(ep.art)}" alt=""></div>
     <div class="pod-up-meta"><div class="pod-ep-date">${pr ? 'Resume' : esc(epDate(ep.date))}</div><div class="pod-up-t">${esc(ep.title)}</div><div class="pod-up-foot">${esc(timeLeft(ep))}${pct ? `<span class="pod-bar"><i style="width:${pct}%"></i></span>` : ''}</div></div></div>`;
 }
+/* =====================================================================
+   Audiobooks: your own books, narrated on your Mac, with your place saved on every device
+   ===================================================================== */
+const bookKey = t => `${t.album || t.title}\u0001${t.albumArtist || t.artist}`;
+function books() {
+  const m = new Map();
+  for (const t of S.tracks.values()) { if (!isBook(t)) continue; const k = bookKey(t); if (!m.has(k)) m.set(k, []); m.get(k).push(t); }
+  for (const ts of m.values()) ts.sort((a, b) => (parseInt(a.trackNo) || 0) - (parseInt(b.trackNo) || 0) || (a.file || '').localeCompare(b.file || ''));
+  return m;
+}
+const bookChapters = key => books().get(key) || [];
+function bookProgress(t, c, d) { S.pod.prog[t.id] = { t: Math.round(c), d: Math.round(d), done: d - c < 3, at: Date.now() }; podSave(); }
+/** Where you are in a book: the chapter you last listened to (or the next one if you finished it). */
+function bookSpot(key) {
+  const ch = bookChapters(key); if (!ch.length) return null;
+  let last = -1, at = 0;
+  ch.forEach((t, i) => { const p = S.pod.prog[t.id]; if (p && p.at > at) { at = p.at; last = i; } });
+  if (last < 0) return { i: 0, t: 0, started: false, at: 0 };
+  const p = S.pod.prog[ch[last].id];
+  if (p.done) return last + 1 < ch.length ? { i: last + 1, t: 0, started: true, at } : { i: 0, t: 0, started: true, finished: true, at };
+  return { i: last, t: p.t, started: true, at };
+}
+function bookStats(key) {
+  const ch = bookChapters(key), total = ch.reduce((a, t) => a + (t.duration || 0), 0);
+  const heard = ch.reduce((a, t) => { const p = S.pod.prog[t.id]; return a + (p ? (p.done ? (t.duration || p.d || 0) : Math.min(p.t, t.duration || p.t)) : 0); }, 0);
+  return { total, left: Math.max(0, total - heard), pct: total ? Math.min(100, heard / total * 100) : 0 };
+}
+const leftTxt = s => { const m = Math.max(1, Math.round(s / 60)); return m >= 60 ? `${Math.floor(m / 60)} hr ${m % 60 ? (m % 60) + ' min' : ''}`.trim() : `${m} min`; };
+async function bookPlay(key, id) {
+  const ch = bookChapters(key); if (!ch.length) return;
+  let i = id ? ch.findIndex(t => t.id === id) : -1;
+  if (i < 0) { const sp = bookSpot(key); i = sp.i; }
+  if (current()?.id === ch[i].id) return toggle();
+  const t = ch[i], p = S.pod.prog[t.id];
+  if (id && p?.done) delete S.pod.prog[t.id]; // tapping a finished chapter plays it again from the start
+  await playList(ch.map(x => x.id), i, { context: t.album || 'Audiobook', ctxRoute: 'book/' + encodeURIComponent(key) });
+}
+function bookRestart(key) {
+  confirmSheet('Start this book over?', 'Your place in every chapter is cleared on all your devices.', 'Start over', async () => {
+    for (const t of bookChapters(key)) delete S.pod.prog[t.id];
+    podSave(); render(); bookPlay(key);
+  });
+}
+/** Books keep their own speed (many people listen faster); music always goes back to normal speed. */
+function bookSpeed(on) {
+  const r = on ? (S.settings.bookSpeed || 1) : 1;
+  P.bookRate = on; P.speed = r; engine.setRate(r);
+  const b = $('#speed-btn'); if (b) { b.textContent = r + '×'; b.classList.toggle('on', r !== 1); }
+}
+function chapterPanel(t) {
+  const key = bookKey(t), ch = bookChapters(key);
+  return `<div class="book-chapters"><div class="bc-head"><b>${esc(t.album || 'Chapters')}</b><span>${esc(t.artist)}</span></div>${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div>`;
+}
+function chapterRow(c, i, key) {
+  const p = S.pod.prog[c.id], on = current()?.id === c.id, d = c.duration || p?.d || 0;
+  const state = p?.done ? 'Finished' : p && p.t > 5 && d ? `${leftTxt(d - p.t)} left` : d ? leftTxt(d) : '';
+  const pct = p && !p.done && d ? Math.min(100, p.t / d * 100) : 0;
+  return `<div class="chapter${on ? ' playing' : ''}${p?.done ? ' done' : ''}" data-action="book-play" data-book="${esc(key)}" data-id="${esc(c.id)}">
+    <span class="ch-n">${on && !engine.el.paused ? '<span class="eq"><i></i><i></i><i></i></span>' : p?.done ? icon('check') : i + 1}</span>
+    <span class="ch-main"><span class="ch-t ellipsis">${esc(c.title)}</span>${pct ? `<span class="pod-bar"><i style="width:${pct}%"></i></span>` : ''}</span>
+    <span class="ch-time">${esc(state)}</span></div>`;
+}
+function bookCover(t, cls = '') { return `<div class="book-cover ${cls}"><img loading="lazy" decoding="async" src="${artOf(t, cls ? 'full' : 'thumb')}" alt=""></div>`; }
+function bookCard([key, ch]) {
+  const st = bookStats(key), sp = bookSpot(key);
+  return `<a class="book-card" href="#/book/${encodeURIComponent(key)}">${bookCover(ch[0])}
+    <div class="bk-t ellipsis">${esc(ch[0].album || ch[0].title)}</div><div class="bk-s ellipsis">${esc(ch[0].artist)}</div>
+    <div class="bk-foot">${sp?.finished ? 'Finished' : sp?.started ? `<span class="pod-bar"><i style="width:${st.pct}%"></i></span>${esc(leftTxt(st.left))} left` : esc(leftTxt(st.total))}</div></a>`;
+}
+const BOOK_HOW = `On your Mac, put the book’s EPUB or PDF in the <b>Fof Music Books</b> folder in Music. Fof Music reads it aloud chapter by chapter in the background, and it shows up here on all your devices. EPUB files sound best.`;
+VIEWS.books = () => {
+  const all = [...books()].map(([k, ch]) => [k, ch, bookSpot(k)]);
+  const going = all.filter(x => x[2]?.started && !x[2].finished).sort((a, b) => b[2].at - a[2].at);
+  const hero = going[0];
+  const add = window.fofDesktop?.addBook ? `<button class="btn" data-action="add-book">${icon('plus')}Add a book</button>` : '';
+  if (!all.length) return `<div class="page-head"><h1>Audiobooks</h1>${add}</div><div class="empty-state book-empty">${icon('book')}<h2>Your own audiobooks</h2><p>${BOOK_HOW}</p>${add}</div>`;
+  let heroHtml = '';
+  if (hero) {
+    const [k, ch, sp] = hero, st = bookStats(k), t = ch[sp.i];
+    heroHtml = `<section class="book-hero" style="${ambient(t.colors || colorsOf(ch))}">${bookCover(t, 'big')}
+      <div class="bh-meta"><div class="eyebrow">Continue listening</div><h2>${esc(t.album)}</h2><div class="muted">${esc(t.artist)}</div>
+      <div class="bh-now">${esc(t.title)}</div><div class="bh-bar"><span class="pod-bar"><i style="width:${st.pct}%"></i></span><span>${esc(leftTxt(st.left))} left</span></div>
+      <button class="btn primary" data-action="book-play" data-book="${esc(k)}">${icon(current()?.id === t.id && !engine.el.paused ? 'pause' : 'play')}${current()?.id === t.id && !engine.el.paused ? 'Pause' : 'Resume'}</button></div></section>`;
+  }
+  return `<div class="page-head"><h1>Audiobooks</h1>${add}</div>${heroHtml}
+    <section class="section"><div class="section-head"><h2>Your Books</h2></div><div class="book-grid">${all.map(([k, ch]) => bookCard([k, ch])).join('')}</div></section>
+    <p class="muted book-how">${BOOK_HOW}</p>`;
+};
+VIEWS.book = () => {
+  const key = S.param, ch = bookChapters(key);
+  if (!ch.length) return `${back()}<div class="empty-state small"><p>This book isn’t in your library.</p></div>`;
+  const t0 = ch[0], st = bookStats(key), sp = bookSpot(key), playingHere = ch.some(c => c.id === current()?.id) && !engine.el.paused;
+  const label = playingHere ? 'Pause' : sp.finished ? 'Listen again' : sp.started ? `Resume · ${ch[sp.i].title}` : 'Start listening';
+  return `${back()}<div class="book-head" style="${ambient(t0.colors || colorsOf(ch))}">${bookCover(t0, 'big')}
+    <div class="bkh-meta"><div class="eyebrow">Audiobook</div><h1>${esc(t0.album || t0.title)}</h1><div class="muted">${esc(t0.artist)}</div>
+    <div class="bkh-facts">${ch.length} chapter${ch.length === 1 ? '' : 's'} · ${esc(leftTxt(st.total))}${sp.started && !sp.finished ? ` · ${esc(leftTxt(st.left))} left` : ''}</div>
+    ${sp.started && !sp.finished ? `<div class="bh-bar"><span class="pod-bar"><i style="width:${st.pct}%"></i></span></div>` : ''}
+    <div class="row-actions"><button class="btn primary" data-action="book-play" data-book="${esc(key)}">${icon(playingHere ? 'pause' : 'play')}<span class="ellipsis">${esc(label)}</span></button>${sp.started ? `<button class="btn ghost" data-action="book-restart" data-book="${esc(key)}">Start over</button>` : ''}</div></div></div>
+    <section class="section"><div class="section-head"><h2>Chapters</h2></div><div class="book-chapters">${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div></section>`;
+};
 VIEWS.podcasts = () => {
   S.pod.subs.forEach(s => showEps(s.id));
   const topicTiles = pods.TOPICS.map(t => `<a class="pod-topic" href="#/topic/${t.key}" style="--c:${t.color}"><span>${t.name}</span></a>`).join('');
@@ -4613,6 +4725,7 @@ function driveMaps() {
 
 /* actions for the screens above */
 const ACT2 = {
+  'add-book': async () => { const r = await window.fofDesktop?.addBook?.(); if (r) toast(`Narrating ${r} on this Mac. Chapters show up here as they’re ready.`); },
   'grow-toggle': async a => { const p = S.playlists.get(a.dataset.pl); if (!p) return; p.auto = p.auto === false; await savePlaylist(p); render(); toast(p.auto ? 'This playlist will grow on its own' : 'Auto-add is off for this playlist'); if (p.auto) growPlaylists(true).catch(() => {}); },
   'grow-undo': a => growUndo(a.dataset.pl, [a.dataset.id]),
   'grow-undo-all': a => { const p = S.playlists.get(a.dataset.pl); const wk = Date.now() - 7 * DAY; return growUndo(a.dataset.pl, (p?.added || []).filter(x => x.at > wk).map(x => x.id)); },

@@ -3,6 +3,7 @@
 // - imports new songs from your music folders in the background (no browser tab needed)
 // - menu bar mini player; the keyboard's play/pause/next keys work through macOS Now Playing
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, session, protocol } = require('electron');
+const narrator = require('./narrator');
 const { Readable } = require('stream');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -57,7 +58,7 @@ function defaultFolders() {
   } catch {}
   return [...new Set(c)].filter(d => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
 }
-const folders = () => (cfg.folders && cfg.folders.length ? cfg.folders : defaultFolders());
+const folders = () => { const f = cfg.folders && cfg.folders.length ? cfg.folders : defaultFolders(); return f.some(d => narrator.OUT.startsWith(path.resolve(d) + path.sep)) || !fs.existsSync(narrator.OUT) ? f : [...f, narrator.OUT]; };
 
 async function walk(dir, depth, out) {
   let ents; try { ents = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
@@ -123,8 +124,14 @@ function buildMenu() {
     { label: 'Previous', click: () => control('prev') },
     { label: 'Fof Flow', click: () => control('flow') },
     { type: 'separator' },
+    ...(narrator.status().busy ? [{ label: `Narrating ${short(narrator.status().book, 30)}`, enabled: false }, { label: narrator.status().line, enabled: false }, { type: 'separator' }] : []),
     { label: 'Open Fof Music', click: show },
     { label: 'Check for new songs', click: () => scan(true) },
+    { label: 'Audiobooks', submenu: [
+      { label: 'Add a book…', click: () => narrator.addBook(win) },
+      { label: 'Open the Books folder', click: () => shell.openPath(narrator.BOOKS) },
+      { label: 'Open the narrator log', click: () => shell.openPath(path.join(app.getPath('userData'), 'narrator', 'narrator.log')) },
+    ] },
     { label: 'Folders it watches', submenu: [
       ...(fl.length ? fl.map(d => ({ label: d.replace(HOME, '~'), click: () => shell.openPath(d) })) : [{ label: 'None yet', enabled: false }]),
       { type: 'separator' },
@@ -155,6 +162,8 @@ ipcMain.handle('read', async (_e, p) => {
 });
 ipcMain.handle('exists', (_e, p) => folders().some(d => path.resolve(p).startsWith(path.resolve(d) + path.sep)) && fs.existsSync(p));
 ipcMain.handle('folders', () => folders());
+ipcMain.handle('add-book', () => narrator.addBook(win));
+ipcMain.handle('narrator', () => narrator.status());
 ipcMain.handle('add-folder', () => addFolder());
 ipcMain.on('scan-now', () => scan(true));
 ipcMain.on('state', (_e, s) => { state = { ...state, ...s }; paintTray(); });
@@ -171,9 +180,10 @@ app.whenReady().then(() => {
   if (hidden && app.dock) app.dock.hide();
   login();
   watchAll();
+  narrator.start((st, ev) => { buildMenu(); if (win) win.webContents.send('narrator', st); if (ev === 'chapter') { watchAll(); setTimeout(() => scan(true), 3000); } });
   setInterval(() => scan(), 60 * 1000);
   setInterval(() => { if (!fs.existsSync(folders()[0] || '/nonexistent')) return; if (!watchers.length) watchAll(); }, 5 * 60 * 1000);
 });
 app.on('activate', show);
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', () => { quitting = true; narrator.stop(); });
 app.on('window-all-closed', e => e.preventDefault());

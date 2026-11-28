@@ -11,7 +11,7 @@
   "build": {
     "appId": "com.fofmusic.mac",
     "productName": "Fof Music",
-    "files": ["main.js", "preload.js", "build/tray*.png"],
+    "files": ["main.js", "preload.js", "narrator.js", "build/tray*.png"],
     "mac": { "category": "public.app-category.music", "icon": "build/icon.png", "identity": null, "target": ["zip"], "extendInfo": { "LSUIElement": false, "NSAppleEventsUsageDescription": "Fof Music controls playback from the menu bar." } },
     "artifactName": "FofMusic-mac.${ext}"
   }

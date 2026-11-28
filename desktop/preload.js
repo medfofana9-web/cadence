@@ -14,4 +14,8 @@ contextBridge.exposeInMainWorld('fofDesktop', {
   folders: () => ipcRenderer.invoke('folders'),
   addFolder: () => ipcRenderer.invoke('add-folder'),
   scanNow: () => ipcRenderer.send('scan-now'),
+  /** pick an EPUB/PDF; the Mac narrates it into an audiobook */
+  addBook: () => ipcRenderer.invoke('add-book'),
+  narrator: () => ipcRenderer.invoke('narrator'),
+  onNarrator: fn => ipcRenderer.on('narrator', (_e, s) => fn(s)),
 });

@@ -30,6 +30,7 @@
       <a data-route="songs" href="#/songs" class="nav-link"><svg><use href="#i-note"/></svg>Songs</a>
       <a data-route="artists" href="#/artists" class="nav-link"><svg><use href="#i-mic"/></svg>Artists</a>
       <a data-route="albums" href="#/albums" class="nav-link"><svg><use href="#i-album"/></svg>Albums</a>
+      <a data-route="books" href="#/books" class="nav-link"><svg><use href="#i-book"/></svg>Audiobooks</a>
       <a data-route="liked" href="#/liked" class="nav-link"><svg><use href="#i-heart"/></svg>Liked Songs</a>
       <a data-route="replay" href="#/replay" class="nav-link"><svg><use href="#i-spark"/></svg>Replay</a>
       <a data-route="insights" href="#/insights" class="nav-link"><svg><use href="#i-chart"/></svg>Your listening</a>
@@ -105,9 +106,11 @@
       </div>
       <div class="now-controls">
         <button class="icon-btn mode" id="now-shuffle" data-action="shuffle"><svg><use href="#i-shuffle"/></svg></button>
+        <button class="icon-btn skip book-only" data-action="skip-back" aria-label="Back 15 seconds"><svg><use href="#i-back15"/></svg></button>
         <button class="icon-btn big" data-action="prev"><svg><use href="#i-prev"/></svg></button>
         <button class="play-btn huge" id="now-play" data-action="toggle"><svg><use href="#i-play"/></svg></button>
         <button class="icon-btn big" data-action="next"><svg><use href="#i-next"/></svg></button>
+        <button class="icon-btn skip book-only" data-action="skip-fwd" aria-label="Forward 30 seconds"><svg><use href="#i-fwd30"/></svg></button>
         <button class="icon-btn mode" id="now-repeat" data-action="repeat"><svg><use href="#i-repeat"/></svg></button>
       </div>
       </div>
@@ -145,6 +148,9 @@
     <symbol id="i-artist-more" viewBox="0 0 24 24"><circle cx="9.5" cy="8" r="3.6" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M3 19.5c.4-3.3 3.1-5.5 6.5-5.5 1.5 0 2.9.4 4 1.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M19.5 9.5v7.2a2.1 2.1 0 1 1-1.9-2.1c.6 0 1.1.2 1.5.5V8.6l2.4-.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
 <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M15.5 8.5V6.6A2.6 2.6 0 0 0 12.9 4H6.6A2.6 2.6 0 0 0 4 6.6v6.3a2.6 2.6 0 0 0 2.6 2.6h1.9" fill="none" stroke="currentColor" stroke-width="1.9"/></symbol>
 <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 3.5v11.5M8 7.3 12 3.3l4 4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.5 10.5H7.2A2.2 2.2 0 0 0 5 12.7v6.1A2.2 2.2 0 0 0 7.2 21h9.6a2.2 2.2 0 0 0 2.2-2.2v-6.1a2.2 2.2 0 0 0-2.2-2.2h-1.3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M6.5 3h11A1.5 1.5 0 0 1 19 4.5v13.2c0 .4-.3.7-.7.7H7.2a1.2 1.2 0 0 0 0 2.4h11.1c.4 0 .7.3.7.7s-.3.5-.7.5H7.2A2.7 2.7 0 0 1 4.5 19.3V5A2 2 0 0 1 6.5 3zm2.2 3.4a.8.8 0 0 0 0 1.6h6.6a.8.8 0 0 0 0-1.6H8.7z"/></symbol>
+<symbol id="i-back15" viewBox="0 0 24 24"><path d="M12 4.2V2.4c0-.4-.45-.62-.77-.38L7.6 4.8c-.25.2-.25.58 0 .78l3.63 2.8c.32.24.77.02.77-.38V6.2a6.8 6.8 0 1 1-6.8 6.8 1 1 0 0 0-2 0A8.8 8.8 0 1 0 12 4.2z"/><text x="12.2" y="16.3" text-anchor="middle" font-size="7.2" font-weight="700" font-family="-apple-system,system-ui,sans-serif">15</text></symbol>
+<symbol id="i-fwd30" viewBox="0 0 24 24"><path d="M12 4.2V2.4c0-.4.45-.62.77-.38l3.63 2.78c.25.2.25.58 0 .78l-3.63 2.8c-.32.24-.77.02-.77-.38V6.2a6.8 6.8 0 1 0 6.8 6.8 1 1 0 0 1 2 0A8.8 8.8 0 1 1 12 4.2z"/><text x="11.8" y="16.3" text-anchor="middle" font-size="7.2" font-weight="700" font-family="-apple-system,system-ui,sans-serif">30</text></symbol>
 <symbol id="i-podcast" viewBox="0 0 24 24"><circle cx="12" cy="10.2" r="2.9"/><path d="M10.7 14.6h2.6c.5 0 .9.45.85.95l-.55 5.3c-.05.4-.4.65-.8.65h-1.6c-.4 0-.75-.25-.8-.65l-.55-5.3c-.05-.5.35-.95.85-.95z"/><path d="M6.6 15.6a7.3 7.3 0 1 1 10.8 0M8.9 13.5a4.4 4.4 0 1 1 6.2 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
 <symbol id="i-quran" viewBox="0 0 24 24"><path d="M11.2 5.9C9.1 4.5 6.3 4 3.3 4.4c-.5.07-.8.48-.8.97v12.4c0 .6.53 1.06 1.12.98 2.7-.36 5.2.05 7.08 1.33.18.12.3.06.3-.15V6.5c0-.24-.1-.47-.3-.6zm1.6 0c2.1-1.4 4.9-1.9 7.9-1.5.5.07.8.48.8.97v12.4c0 .6-.53 1.06-1.12.98-2.7-.36-5.2.05-7.08 1.33-.18.12-.3.06-.3-.15V6.5c0-.24.1-.47.3-.6z"/></symbol>
 <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
