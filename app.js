@@ -1234,7 +1234,7 @@ VIEWS.library = () => {
   const row = (href, icon, label, n) => `<a class="lib-row" href="#/${href}"><svg><use href="#i-${icon}"/></svg><span>${label}</span><span class="muted">${n ?? ''}</span><svg class="chev"><use href="#i-back"/></svg></a>`;
   const smarts = Object.entries(SMART).filter(([, d]) => !d.moment).map(([k, d]) => [k, d, d.get(visible())]).filter(x => x[2].length);
   return `<div class="page-head"><h1>Library</h1><a class="icon-btn" href="#/settings" aria-label="Settings"><svg><use href="#i-gear"/></svg></a></div>
-    <div class="lib-rows">${row('books', 'book', 'Audiobooks', books().size || '')}${row('songs', 'note', 'Songs', visible().length)}${row('artists', 'mic', 'Artists', groups('creditedArtist').size)}${row('albums', 'album', 'Albums', groups('album').size)}${row('liked', 'heart', 'Liked Songs', visible().filter(t => t.liked).length)}${S.log.length ? row('replay', 'spark', 'Replay ' + new Date().getFullYear(), '') + row('insights', 'chart', 'Your listening', '') : ''}${row('import', 'upload', 'Add music', '')}${row('cleanup', 'check', 'Clean Up', cleanupCount() || '')}${reviewList().length ? row('review', 'check', 'Check these', reviewList().length) : ''}</div>
+    <div class="lib-rows">${row('books', 'book', 'Audiobooks', books().size || '')}${row('songs', 'note', 'Songs', visible().length)}${row('artists', 'mic', 'Artists', groups('creditedArtist').size)}${row('albums', 'album', 'Albums', groups('album').size)}${row('liked', 'heart', 'Liked Songs', visible().filter(t => t.liked).length)}${S.log.length ? row('replay', 'spark', 'Replay ' + new Date().getFullYear(), '') + row('insights', 'chart', 'Your listening', '') : ''}${row('import', 'upload', 'Add music', '')}${row('cleanup', 'check', 'Library Health', cleanupCount() || '')}${reviewList().length ? row('review', 'check', 'Check these', reviewList().length) : ''}</div>
     ${momentShelf()}
     <section class="section"><div class="section-head"><h2>Playlists</h2><div class="row-actions"><a class="see-all" data-action="pick-playlists">Import from Apple Music</a><a class="see-all" data-action="new-playlist">New playlist</a></div></div>
     ${pls.length ? `<div class="grid">${pls.map(p => collCard({ href: 'playlist/' + p.id, title: p.name, sub: count(p.tracks.length), tracks: p.tracks.map(id => T(id)).filter(Boolean), img: S.plCovers.get(p.id) })).join('')}</div>` : '<p class="muted">No playlists yet.</p>'}</section>
@@ -5005,11 +5005,21 @@ function cleanupScan() {
   for (const t of songs) { if (/^unknown/i.test(t.artist || '')) continue; const k = fold(t.artist); if (!k) continue; if (!byKey.has(k)) byKey.set(k, new Map()); const m = byKey.get(k); m.set(t.artist, (m.get(t.artist) || 0) + 1); }
   const artists = [];
   for (const m of byKey.values()) if (m.size > 1) { const ranked = [...m].sort((a, b) => b[1] - a[1] || (/[A-Z]/.test(b[0]) - /[A-Z]/.test(a[0]))); artists.push({ to: ranked[0][0], from: ranked.slice(1).map(x => x[0]), n: ranked.slice(1).reduce((x, y) => x + y[1], 0) }); }
-  return { names, covers, artists, dups: duplicateGroups().length, eyes: reviewList().length };
+  // content filed under the wrong type (a recitation or lecture sitting in Music, and so on)
+  const kinds = [...S.tracks.values()].filter(t => !t.catEdited && !t.ext && t.category !== 'Audiobooks').map(t => ({ t, to: meta.categorize(t) })).filter(x => x.to !== x.t.category && x.to !== 'Audiobooks');
+  // the same genre written different ways ("Hip Hop", "hip-hop", "Hip-Hop")
+  const gk = new Map();
+  for (const t of songs) { if (!t.genre) continue; const k = fold(t.genre).replace(/[^a-z0-9]/g, ''); if (!gk.has(k)) gk.set(k, new Map()); const m = gk.get(k); m.set(t.genre, (m.get(t.genre) || 0) + 1); }
+  const genres = [];
+  for (const m of gk.values()) if (m.size > 1) { const r = [...m].sort((a, b) => b[1] - a[1]); genres.push({ to: r[0][0], from: r.slice(1).map(x => x[0]), n: r.slice(1).reduce((x, y) => x + y[1], 0) }); }
+  // files that exist in the library list but nowhere to play from
+  const missing = [...S.tracks.values()].filter(t => !t.local && !t.cloud && !t.ext);
+  const unknown = songs.filter(t => /^unknown/i.test(t.artist || ''));
+  return { names, covers, artists, kinds, genres, missing, unknown, dups: duplicateGroups().length, eyes: reviewList().length };
 }
 let cleanMemo = { v: -1, at: 0, r: null };
 function cleanupCached() { if (!cleanMemo.r || cleanMemo.v !== S.ver || Date.now() - cleanMemo.at > 60000) cleanMemo = { v: S.ver, at: Date.now(), r: cleanupScan() }; return cleanMemo.r; }
-function cleanupCount() { try { const c = cleanupCached(); return c.names.length + c.covers.length + c.artists.reduce((x, y) => x + y.n, 0) + c.dups + c.eyes; } catch { return 0; } }
+function cleanupCount() { try { const c = cleanupCached(); return c.names.length + c.covers.length + c.artists.reduce((x, y) => x + y.n, 0) + c.kinds.length + c.genres.reduce((x, y) => x + y.n, 0) + c.dups + c.eyes; } catch { return 0; } }
 const CU = { busy: '', open: '' };
 async function cleanLog() { const l = await kv.get('cleanLog', []); return l.filter(x => Date.now() - x.at < 30 * DAY); }
 async function pushLog(entry) { const l = await cleanLog(); l.unshift(entry); await kv.set('cleanLog', l.slice(0, 40)); S.cleanLogCache = l.slice(0, 40); }
@@ -5021,6 +5031,16 @@ async function fixNames(list) {
 async function fixArtists(groups) {
   const items = [];
   for (const g of groups) for (const t of S.tracks.values()) if (g.from.includes(t.artist)) { const before = t.artist; t.artist = g.to; await saveTrack(t); items.push({ id: t.id, f: 'artist', from: before, to: g.to }); }
+  return items;
+}
+async function fixKinds(list) {
+  const items = [];
+  for (const { t, to } of list) { const before = t.category; t.category = to; await saveTrack(t); items.push({ id: t.id, f: 'category', from: before, to }); }
+  return items;
+}
+async function fixGenres(groups) {
+  const items = [];
+  for (const g of groups) for (const t of S.tracks.values()) if (g.from.includes(t.genre)) { const before = t.genre; t.genre = g.to; await saveTrack(t); items.push({ id: t.id, f: 'genre', from: before, to: g.to }); }
   return items;
 }
 async function fixCovers(ts, progress) {
@@ -5048,6 +5068,8 @@ async function runCleanup(kind) {
     let items = [];
     if (kind === 'names' || kind === 'all') items = items.concat(await fixNames(c.names));
     if (kind === 'artists' || kind === 'all') items = items.concat(await fixArtists(c.artists));
+    if (kind === 'kinds' || kind === 'all') items = items.concat(await fixKinds(c.kinds));
+    if (kind === 'genres' || kind === 'all') items = items.concat(await fixGenres(c.genres));
     if (kind === 'covers' || kind === 'all') items = items.concat(await fixCovers(c.covers, (i, n) => { const el = $('#cu-prog'); if (el) el.textContent = `Finding covers… ${i} of ${n}`; }));
     S.ver++;
     if (items.length) { await pushLog({ id: uid(), at: Date.now(), kind, n: items.length, items }); toast(`Fixed ${count(items.length)}`, ['Undo', () => undoCleanup(0)]); }
@@ -5067,20 +5089,24 @@ async function undoCleanup(i) {
   l.splice(i, 1); await kv.set('cleanLog', l); S.cleanLogCache = l; S.ver++; cleanMemo.r = null; render();
   toast(`Put back ${count(n)}`);
 }
-const CU_LABEL = { all: 'Fix all', names: 'Fixed names', artists: 'Matched artist names', covers: 'Found covers' };
+const CU_LABEL = { all: 'Fix all', names: 'Fixed names', artists: 'Matched artist names', covers: 'Found covers', kinds: 'Moved to the right section', genres: 'Matched genre names' };
 VIEWS.cleanup = () => {
   const c = cleanupCached(); const log = S.cleanLogCache || []; if (!S.cleanLogCache) cleanLog().then(l => { S.cleanLogCache = l; if (S.route === 'cleanup') render(); });
-  const total = c.names.length + c.covers.length + c.artists.length;
+  const total = c.names.length + c.covers.length + c.artists.length + c.kinds.length + c.genres.length;
   const card = (k, title, n, sub, body, act) => `<section class="cu-card${CU.open === k ? ' open' : ''}"><button class="cu-head" data-action="cu-open" data-id="${k}"><div class="cu-n${n ? '' : ' ok'}">${n ? n : icon('check')}</div><div class="cu-t"><b>${title}</b><em>${sub}</em></div>${act || ''}${icon('back', 'chev')}</button>${CU.open === k && body ? `<div class="cu-body">${body}</div>` : ''}</section>`;
   const fixBtn = (k, n) => n ? `<span class="btn small" data-action="cu-run" data-id="${k}" role="button">${CU.busy === k ? 'Fixing…' : 'Fix'}</span>` : '';
   const more = n => n > 40 ? `<div class="cu-more muted">and ${n - 40} more</div>` : '';
-  return `${back()}<div class="page-head"><div><div class="eyebrow">Library</div><h1>Clean Up</h1><div class="lede">${total || c.dups || c.eyes ? 'Tidy names, covers and artists in one tap. Everything can be put back for 30 days.' : 'Your library is clean.'}</div></div>
+  return `${back()}<div class="page-head"><div><div class="eyebrow">Library</div><h1>Library Health</h1><div class="lede">${total || c.dups || c.eyes ? 'Fix names, covers, artists, genres and sections in one tap. Nothing is deleted, and everything can be put back for 30 days.' : 'Your library is clean.'}</div></div>
       ${total ? `<button class="btn primary" data-action="cu-run" data-id="all"${CU.busy ? ' disabled' : ''}>${CU.busy ? 'Working…' : 'Fix all'}</button>` : ''}</div>
     ${CU.busy ? `<div class="cu-prog" id="cu-prog" role="status">${CU.busy === 'covers' || CU.busy === 'all' ? 'Working…' : 'Fixing…'}</div>` : ''}
     <div class="cu-list">
     ${card('names', 'Names to fix', c.names.length, c.names.length ? 'Extra words like “Official Video” or the artist’s name in the title' : 'Every song name looks clean', c.names.slice(0, 40).map(({ t, to }) => `<div class="cu-row"><img loading="lazy" src="${artOf(t)}" alt=""><div class="ellipsis"><s class="ellipsis">${esc(t.title)}</s><b class="ellipsis">${esc(to)}</b></div></div>`).join('') + more(c.names.length), fixBtn('names', c.names.length))}
     ${card('covers', 'Missing covers', c.covers.length, c.covers.length ? 'Songs with a placeholder cover. Real artwork is looked up online.' : 'Every song has its real cover', c.covers.slice(0, 40).map(t => `<div class="cu-row"><img loading="lazy" src="${artOf(t)}" alt=""><div class="ellipsis"><b class="ellipsis">${esc(t.title)}</b><em class="ellipsis">${esc(t.artist)}</em></div></div>`).join('') + more(c.covers.length), fixBtn('covers', c.covers.length))}
     ${card('artists', 'Mixed-up artist names', c.artists.length, c.artists.length ? 'The same artist spelled different ways' : 'Each artist is spelled one way', c.artists.slice(0, 40).map(g => `<div class="cu-row text"><div class="ellipsis"><s class="ellipsis">${g.from.map(esc).join(', ')}</s><b class="ellipsis">${esc(g.to)} · ${count(g.n)}</b></div></div>`).join('') + more(c.artists.length), fixBtn('artists', c.artists.length))}
+    ${card('kinds', 'In the wrong section', c.kinds.length, c.kinds.length ? 'Recitations, lectures or nasheeds filed as music (or the other way round). Moving them keeps them out of your mixes.' : 'Everything is in the right section', c.kinds.slice(0, 40).map(({ t, to }) => `<div class="cu-row"><img loading="lazy" src="${artOf(t)}" alt=""><div class="ellipsis"><b class="ellipsis">${esc(t.title)}</b><em class="ellipsis">${esc(t.category)} → ${esc(to)}</em></div></div>`).join('') + more(c.kinds.length), fixBtn('kinds', c.kinds.length))}
+    ${card('genres', 'Genre names that don’t match', c.genres.length, c.genres.length ? 'The same genre written different ways' : 'Every genre is written one way', c.genres.slice(0, 40).map(g => `<div class="cu-row text"><div class="ellipsis"><s class="ellipsis">${g.from.map(esc).join(', ')}</s><b class="ellipsis">${esc(g.to)} · ${count(g.n)}</b></div></div>`).join('') + more(c.genres.length), fixBtn('genres', c.genres.length))}
+    ${c.missing.length ? `<section class="cu-card"><div class="cu-head"><div class="cu-n">${c.missing.length}</div><div class="cu-t"><b>Missing files</b><em>In your library but not on this device or in your cloud. Add the files again to bring them back. Nothing was deleted.</em></div></div></section>` : ''}
+    ${c.unknown.length ? `<a class="cu-card link" href="#/review"><div class="cu-head"><div class="cu-n">${c.unknown.length}</div><div class="cu-t"><b>Unknown artists</b><em>Songs without an artist name</em></div>${icon('back', 'chev')}</div></a>` : ''}
     <a class="cu-card link" href="#/duplicates"><div class="cu-head"><div class="cu-n${c.dups ? '' : ' ok'}">${c.dups || icon('check')}</div><div class="cu-t"><b>Possible duplicates</b><em>${c.dups ? 'You choose which copy to keep. Nothing is removed on its own.' : 'No duplicates found'}</em></div>${icon('back', 'chev')}</div></a>
     <a class="cu-card link" href="#/review"><div class="cu-head"><div class="cu-n${c.eyes ? '' : ' ok'}">${c.eyes || icon('check')}</div><div class="cu-t"><b>Needs your eyes</b><em>${c.eyes ? 'Songs Fof Music couldn’t name for sure' : 'Nothing needs checking'}</em></div>${icon('back', 'chev')}</div></a>
     </div>
