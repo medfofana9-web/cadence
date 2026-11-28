@@ -936,7 +936,9 @@ function hrefFor(ctx) { return ctx.route.replace(/^#\/?/, ''); }
 
 VIEWS.home = () => {
   const all = visible();
-  if (!all.length) return `<div class="page-head"><div><h1>Home</h1></div></div>${emptyLib()}`;
+  const f = S.homeF || 'all', head = homeHead(f);
+  if (f !== 'all' && f !== 'music') return head + homeFiltered(f);
+  if (!all.length) return head + (f === 'all' && (books().size || S.quranSpot) ? homeFiltered('all') : emptyLib());
   const cur = current();
   const recent = SMART['recently-played'].get();
   const hero = cur || recent[0] || [...all].sort(byAdded)[0];
@@ -946,8 +948,8 @@ VIEWS.home = () => {
   const seenR = new Set(); const pad = [...dailyMixes().slice(0, 4).map((m, i) => ({ route: '#/daily/' + (i + 1), title: 'Daily Mix' })), { route: '#/liked', title: 'Liked Songs' }, ...Object.entries(SMART).filter(([k]) => k !== 'recently-played').map(([k, d]) => ({ route: '#/smart/' + k, title: d.title }))];
   let ctxTiles = [...S.ctxs, ...pad].filter(c => { const r = hrefFor(c); if (seenR.has(r)) return false; seenR.add(r); return true; }).map(c => ctxTile(c)).filter(Boolean).slice(0, 6);
   if (ctxTiles.length % 2) ctxTiles = ctxTiles.slice(0, -1);
-  const dailies = dailyMixes();
-  const mixes = [...groups('mix')].filter(([k, ts]) => !(dailies.length && k === 'Music' && ts.length > all.length * .5)).sort((a, b) => b[1].length - a[1].length);
+  const dailies = dailyMixes().filter(m => m.tracks.length >= 10);
+  const mixes = [...groups('mix')].filter(([k, ts]) => ts.length >= 8 && !(dailies.length && k === 'Music' && ts.length > all.length * .5)).sort((a, b) => b[1].length - a[1].length);
   const because = becauseYouPlayed();
   const smartCards = Object.entries(SMART).map(([k, d]) => [k, d, d.get(all)]).filter(([k, , ts]) => ts.length >= 3 && k !== 'recently-played');
   const liked = all.filter(t => t.liked);
@@ -960,17 +962,20 @@ VIEWS.home = () => {
   const discover = recent.length ? similar(recent.slice(0, 6), 12).map(id => T(id)).filter(t => (t.plays || 0) <= 1) : [];
   const discoverKey = listKey(discover.map(t => t.id), 'Discover');
   const moods = Object.entries(MOODS).map(([k, m]) => [k, m, moodList(k).length]).filter(x => x[2]);
-  return `
-  <div class="page-head home-head"><div><h1>Home</h1></div>
-    <div class="home-acts"><a class="btn drive-btn" href="#/drive" aria-label="Drive mode"><svg><use href="#i-car"/></svg><span>Drive</span></a><button class="btn flow-btn" data-action="flow"><svg><use href="#i-flow"/></svg>Fof Flow</button></div></div>
-  <section class="hero ${cur ? 'live' : ''}" style="${richAmbient(hero.colors)}">
+  const showHero = cur && playCtx(cur) === 'music';
+  const cont = f === 'all' ? continueItems() : [];
+  const bookShelf = f === 'all' && books().size ? shelf('Your Books', [...books()].slice(0, 10).map(bookTile).join(''), { more: 'books' }) : '';
+  return `${head}
+  ${showHero ? `  <section class="hero live" style="${richAmbient(hero.colors)}">
     <div class="hero-art" data-play-list="${heroKey}" data-i="0"><img src="${artOf(hero, 'full')}" alt=""></div>
     <div class="hero-info"><div class="eyebrow">${cur ? '<span class="when-playing">Now Playing</span><span class="when-paused">Paused</span>' : recent.length ? 'Recently Played' : 'Recently Added'}</div>
       <h1 class="ellipsis">${cur ? '<span class="eq hero-eq"><i></i><i></i><i></i></span>' : ''}${esc(hero.title)}</h1><div class="sub ellipsis">${esc(hero.artist)}${hero.album ? ' · ' + esc(hero.album) : ''}</div>
       ${cur ? '<div class="hero-progress"><i id="hero-bar"></i></div>' : ''}
       <div class="row-actions">${cur ? `<button class="btn primary" data-action="toggle"><span class="when-playing"><svg><use href="#i-pause"/></svg>Pause</span><span class="when-paused"><svg><use href="#i-play"/></svg>${resumeAt ? `Resume at ${fmt(resumeAt)}` : 'Resume'}</span></button>` : `<button class="btn primary" data-play-list="${heroKey}" data-i="0"><svg><use href="#i-play"/></svg>Play</button>`}
       ${hero.kind === 'ayah' || hero.kind === 'surahrec' ? `<a class="btn ghost" href="#/quran/${hero.surah}"><svg><use href="#i-quran"/></svg>Open reader</a>` : hero.kind === 'episode' ? `<a class="btn ghost" href="#/show/${hero.showId}"><svg><use href="#i-podcast"/></svg>Show</a>` : hero.kind === 'yt' ? `<a class="btn ghost" href="#/feysal/${hero.albumKey}"><svg><use href="#i-quran"/></svg>All recitations</a>` : `<button class="btn ghost" data-action="radio" data-id="${hero.id}"><svg><use href="#i-radio"/></svg>Song radio</button>`}</div></div>
-  </section>
+  </section>` : ''}
+  ${flowCard(hero)}
+  ${contRow(cont)}
   ${S.wantNew ? (() => { const got = wants().filter(w => w.arrived).sort((a, b) => b.arrived - a.arrived).slice(0, S.wantNew); return `<a class="check-banner want-banner" href="#/import/want"><div class="cb-stack">${got.slice(0, 3).map(w => `<img src="${esc(w.art)}" alt="">`).join('')}</div><div><b>${count(S.wantNew)} from your Want list ${S.wantNew === 1 ? 'is' : 'are'} here</b><span>${esc(got.slice(0, 2).map(w => w.title).join(', '))}${S.wantNew > 2 ? ' and more' : ''}</span></div><svg class="chev"><use href="#i-back"/></svg></a>`; })() : ''}
   ${(() => { const n = reviewList().length; return n ? `<a class="check-banner" href="#/review"><div class="cb-stack">${reviewList().slice(0, 3).map(t => `<img src="${artOf(t)}" alt="">`).join('')}</div><div><b>${count(n)} to check</b><span>Quick look at names Fof Music wasn’t sure about</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''; })()}
   ${ctxTiles.length ? `<section class="section"><div class="section-head"><h2>Jump back in</h2></div><div class="tiles">${ctxTiles.join('')}</div></section>` : ''}
@@ -981,6 +986,7 @@ VIEWS.home = () => {
     ...mixes.map(([k, ts]) => collCard({ href: 'mix/' + k, title: mixName(k), sub: count(ts.length), tracks: ts })),
     liked.length ? collCard({ href: 'liked', title: 'Liked Songs', sub: count(liked.length), tracks: liked }) : '',
   ].join(''))}
+  ${bookShelf}
   ${moods.length ? `<section class="section"><div class="section-head"><div><h2>Moods</h2></div></div><div class="chips mood-chips">${moods.map(([k, m, n]) => `<button class="chip mood" data-href="mood/${k}">${esc(m.title)}<span>${n}</span></button>`).join('')}</div></section>` : ''}
   ${because.map(([a, ts]) => { const k = listKey(ts.map(t => t.id), 'Because you played ' + a); return shelf(`More Like ${a}`, ts.map((t, i) => trackCard(t, k, i)).join('')); }).join('')}
   ${discover.length >= 3 ? shelf('Rediscover', discover.map((t, i) => trackCard(t, discoverKey, i)).join('')) : ''}
@@ -988,6 +994,69 @@ VIEWS.home = () => {
   ${favArtists.length ? shelf(hasTaste ? 'Favorite Artists' : 'Artists', favArtists.map(([a]) => { const ts = groups('artist').get(a) || []; return collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artistImg(ts, a) }); }).join(''), { more: 'artists' }) : ''}
   ${S.log.length >= 5 ? `<a class="insights-link" href="#/replay"><svg><use href="#i-chart"/></svg><div><b>Replay</b><span>${hours(S.log.reduce((a, e) => a + (e.s || 0), 0))} listened</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''}`;
 };
+const HOME_F = [['all', 'All'], ['music', 'Music'], ['podcasts', 'Podcasts'], ['books', 'Books'], ['quran', 'Quran']];
+function firstName() { const n = S.settings.name || S.user?.user_metadata?.full_name || S.user?.user_metadata?.name || ''; return String(n).trim().split(/\s+/)[0] || ''; }
+function homeHead(f) {
+  const nm = firstName(), day = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  return `<div class="page-head home-head"><div><div class="home-date">${esc(day)}</div><h1>${greeting()}${nm ? ', ' + esc(nm) : ''}</h1></div>
+    <div class="home-acts"><a class="btn drive-btn" href="#/drive" aria-label="Drive mode"><svg><use href="#i-car"/></svg><span>Drive</span></a></div></div>
+  <div class="chips home-chips" role="tablist">${HOME_F.map(([k, l]) => `<button class="chip${f === k ? ' on' : ''}" role="tab" aria-selected="${f === k}" data-action="home-f" data-id="${k}">${l}</button>`).join('')}</div>`;
+}
+function flowCard(seed) {
+  const h = new Date().getHours(), when = h < 5 ? 'late night' : h < 12 ? 'this morning' : h < 17 ? 'this afternoon' : 'tonight';
+  return `<button class="flow-card" data-action="flow" style="${seed ? richAmbient(seed.colors) : ''}"><span class="fc-orb"><svg><use href="#i-flow"/></svg></span>
+    <span class="fc-txt"><span class="fc-eb">FOF Flow</span><b>Music that keeps going</b><em>Picked from what you love playing ${when}</em></span><span class="fc-play"><svg><use href="#i-play"/></svg></span></button>`;
+}
+/** Everything you were in the middle of — books, chapters still being narrated, podcasts and lectures, and the Quran — newest first. */
+function continueItems(only) {
+  const out = [], want = k => !only || only === k;
+  if (want('books')) {
+    for (const [k, ch] of books()) {
+      const sp = bookSpot(k); if (!sp?.started || sp.finished || narratingFor(ch[0].album)) continue;
+      const st = bookStats(k);
+      out.push({ at: sp.at, html: contCard({ img: artOf(ch[0], 'full'), book: true, eb: 'Audiobook', t: ch[0].album || ch[0].title, s: `${leftTxt(st.left)} left`, pct: st.pct, act: `data-action="book-play" data-book="${esc(k)}"`, href: `#/book/${encodeURIComponent(k)}` }) });
+    }
+    for (const b of S.bookQueue || []) {
+      const p = S.pod.prog['v:' + b.id]; if (!p || b.status === 'done') continue;
+      out.push({ at: p.at || 0, html: contCard({ img: b.cover, book: true, eb: 'Audiobook', t: b.name.replace(/\s*\(.*$/, ''), s: `Chapter ${(p.ch || 0) + 1}${p.n ? ' of ' + p.n : ''}`, pct: p.n ? p.ch / p.n * 100 : 0, act: `data-action="read-queued" data-id="${esc(b.id)}"` }) });
+    }
+  }
+  if (want('podcasts')) for (const [id, p] of Object.entries(S.pod.prog)) {
+    const ep = S.ext.get(id); if (!ep || p.done || p.t <= 5 || ep.kind === 'yt' || isBook(ep)) continue;
+    const d = ep.duration || p.d || 0;
+    out.push({ at: p.at || 0, html: contCard({ img: ep.art || artOf(ep), eb: ep.kind === 'episode' ? 'Podcast' : 'Lecture', t: ep.title, s: ep.artist || '', pct: d ? p.t / d * 100 : 0, act: ep.kind === 'episode' ? `data-action="pod-play" data-id="${esc(id)}"` : `data-play-list="${listKey([id], ep.title)}" data-i="0"` }) });
+  }
+  if (want('quran') && S.quranSpot) {
+    const q = S.quranSpot, s = qList()?.[q.surah - 1];
+    out.push({ at: q.at || 0, html: contCard({ quran: true, eb: 'Quran', t: s ? `${s.englishName}` : `Surah ${q.surah}`, s: `Verse ${q.ayah}${s ? ' of ' + s.numberOfAyahs : ''}`, ar: s ? surahName(s) : '', pct: s ? q.ayah / s.numberOfAyahs * 100 : 0, act: 'data-action="q-resume"' }) });
+  }
+  return out.sort((a, b) => b.at - a.at).slice(0, 12).map(x => x.html);
+}
+function contCard({ img, book, quran, eb, t, s, ar, pct, act, href }) {
+  const art = quran ? `<div class="cc-art cc-q">${ar ? `<span dir="rtl" lang="ar">${esc(ar)}</span>` : icon('quran')}</div>` : `<div class="cc-art${book ? ' cc-book' : ''}">${img ? `<img loading="lazy" decoding="async" src="${esc(img)}" alt="">` : ''}</div>`;
+  return `<div class="cc" ${act} role="button" tabindex="0">${art}<div class="cc-meta"><div class="cc-eb">${esc(eb)}</div><div class="cc-t">${esc(t)}</div><div class="cc-s ellipsis">${esc(s)}</div>
+    <div class="cc-foot"><span class="cc-bar"><i style="width:${Math.max(3, Math.min(100, pct || 0)).toFixed(1)}%"></i></span><span class="cc-go"><svg><use href="#i-play"/></svg></span></div></div></div>`;
+}
+function contRow(items) { return items.length ? `<section class="section"><div class="section-head"><div><h2>Continue Listening</h2></div></div><div class="shelf cc-row">${items.join('')}</div></section>` : ''; }
+function homeFiltered(f) {
+  if (f === 'all') return contRow(continueItems()) + (books().size ? shelf('Your Books', [...books()].map(bookTile).join(''), { more: 'books' }) : '');
+  if (f === 'books') {
+    const bs = [...books()], q = (S.bookQueue || []).filter(b => b.status !== 'done' && !bs.some(([, ch]) => narratingFor(ch[0].album) === b));
+    return contRow(continueItems('books')) + (bs.length || q.length ? `<section class="section"><div class="section-head"><h2>Your Books</h2><a class="see-all" href="#/books">Open Audiobooks</a></div><div class="bk-grid">${bs.map(bookTile).join('')}${q.map(queueTile).join('')}</div></section>`
+      : `<div class="empty-state small"><h2>No books yet</h2><p>Add an EPUB or PDF and it becomes an audiobook you can listen to and read along with.</p><a class="btn primary" href="#/books">Go to Audiobooks</a></div>`);
+  }
+  if (f === 'podcasts') {
+    const up = upNext().filter(e => !S.pod.prog[e.id]);
+    return contRow(continueItems('podcasts')) + (up.length ? shelf('New Episodes', up.map(upCard).join(''), { more: 'podcasts' }) : '')
+      + (S.pod.subs.length ? `<section class="section"><div class="section-head"><h2>Your Shows</h2><a class="see-all" href="#/podcasts">See all</a></div><div class="pod-shows">${S.pod.subs.map(showTile).join('')}</div></section>`
+      : `<div class="empty-state small"><h2>No shows yet</h2><p>Follow a podcast and new episodes show up here.</p><a class="btn primary" href="#/podcasts">Find podcasts</a></div>`);
+  }
+  // Quran: names and verse counts come from the Quran service, never typed in by hand
+  const list = qList();
+  const picks = [1, 18, 36, 55, 67].map(n => list?.[n - 1]).filter(Boolean);
+  return contRow(continueItems('quran')) + `<section class="section"><div class="section-head"><h2>Often Read</h2><a class="see-all" href="#/quran">All 114 surahs</a></div>
+    ${picks.length ? `<div class="settings-group q-list">${picks.map(s => `<a class="q-row" href="#/quran/${s.number}"><span class="q-n">${s.number}</span><span class="q-main"><b>${esc(s.englishName)}</b><em>${esc(s.englishNameTranslation)} · ${s.numberOfAyahs} verses</em></span><span class="q-ar" dir="rtl" lang="ar">${esc(surahName(s))}</span></a>`).join('')}</div>` : '<div class="pod-loading">Loading…</div>'}</section>`;
+}
 function ctxTile(c) {
   const h = hrefFor(c); const [r, ...rest] = h.split('/'); const p = rest.join('/');
   let tracks = [], title = c.title, img;
@@ -1242,7 +1311,7 @@ VIEWS.library = () => {
   const row = (href, icon, label, n) => `<a class="lib-row" href="#/${href}"><svg><use href="#i-${icon}"/></svg><span>${label}</span><span class="muted">${n ?? ''}</span><svg class="chev"><use href="#i-back"/></svg></a>`;
   const smarts = Object.entries(SMART).filter(([, d]) => !d.moment).map(([k, d]) => [k, d, d.get(visible())]).filter(x => x[2].length);
   return `<div class="page-head"><h1>Library</h1><a class="icon-btn" href="#/settings" aria-label="Settings"><svg><use href="#i-gear"/></svg></a></div>
-    <div class="lib-rows">${row('books', 'book', 'Audiobooks', books().size || '')}${row('songs', 'note', 'Songs', visible().length)}${row('artists', 'mic', 'Artists', groups('creditedArtist').size)}${row('albums', 'album', 'Albums', groups('album').size)}${row('liked', 'heart', 'Liked Songs', visible().filter(t => t.liked).length)}${S.log.length ? row('replay', 'spark', 'Replay ' + new Date().getFullYear(), '') + row('insights', 'chart', 'Your listening', '') : ''}${row('import', 'upload', 'Add music', '')}${row('cleanup', 'check', 'Library Health', cleanupCount() || '')}${reviewList().length ? row('review', 'check', 'Check these', reviewList().length) : ''}</div>
+    <div class="lib-rows">${row('books', 'book', 'Audiobooks', books().size || '')}${row('podcasts', 'podcast', 'Podcasts', S.pod.subs.length || '')}${row('songs', 'note', 'Songs', visible().length)}${row('artists', 'mic', 'Artists', groups('creditedArtist').size)}${row('albums', 'album', 'Albums', groups('album').size)}${row('liked', 'heart', 'Liked Songs', visible().filter(t => t.liked).length)}${S.log.length ? row('replay', 'spark', 'Replay ' + new Date().getFullYear(), '') + row('insights', 'chart', 'Your listening', '') : ''}${row('import', 'upload', 'Add music', '')}${row('cleanup', 'check', 'Library Health', cleanupCount() || '')}${reviewList().length ? row('review', 'check', 'Check these', reviewList().length) : ''}</div>
     ${momentShelf()}
     <section class="section"><div class="section-head"><h2>Playlists</h2><div class="row-actions"><a class="see-all" data-action="pick-playlists">Import from Apple Music</a><a class="see-all" data-action="new-playlist">New playlist</a></div></div>
     ${pls.length ? `<div class="grid">${pls.map(p => collCard({ href: 'playlist/' + p.id, title: p.name, sub: count(p.tracks.length), tracks: p.tracks.map(id => T(id)).filter(Boolean), img: S.plCovers.get(p.id) })).join('')}</div>` : '<p class="muted">No playlists yet.</p>'}</section>
@@ -1858,6 +1927,7 @@ VIEWS.settings = () => {
       const localOnly = [...S.tracks.values()].filter(t => t.local && !t.cloud).length;
       return `<div class="settings-group">
         <div class="set-row"><div class="lbl"><b>${esc(S.user.email)}</b><span>Signed in. Your library, playlists, likes and listening history sync to every device you sign in on.</span></div><button class="btn ghost" data-action="sign-out">Sign out</button></div>
+        <div class="set-row"><div class="lbl"><b>Your name</b><span>Used for the greeting on Home</span></div><input class="input set-name" id="set-name" value="${esc(S.settings.name || '')}" placeholder="First name" autocomplete="given-name" maxlength="30"></div>
         <div class="set-row"><div class="lbl"><b>Sync</b><span>${S.lastSync ? 'Last synced ' + new Date(S.lastSync).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : 'Not synced yet'}${navigator.onLine ? '' : ' · offline'}</span></div><button class="btn" data-action="sync">Sync now</button></div>
         ${localOnly ? `<div class="set-row"><div class="lbl"><b>${count(localOnly)} only on this device</b><span>Upload them so your other devices can play them too</span></div><button class="btn primary" data-action="upload-local">Upload</button></div>` : ''}
         <div class="set-row"><div class="lbl"><b>Password</b><span>Change the password for this account</span></div><button class="btn ghost" data-action="change-pass">Change</button></div></div>`;
@@ -3030,6 +3100,8 @@ document.addEventListener('click', async e => {
       case 'sleep': return sleepMenu(e);
       case 'radio': return radio(id);
       case 'flow': return flow();
+      case 'home-f': S.homeF = id; return render();
+      case 'q-resume': return qResume();
       case 'radio-artist': { const ts = groups('creditedArtist').get(a.dataset.name) || []; if (!ts.length) return; P.shuffle = false; const seed = ts[Math.floor(Math.random() * ts.length)]; playList([...shuffleArr(ts.map(t => t.id)).slice(0, 6), ...similar(ts, 20, new Set(ts.map(t => t.id)))], 0, { context: `${a.dataset.name} Radio`, mode: 'radio', seed: seed.id }); return toast(`${a.dataset.name} Radio · from your library`); }
       case 'play-one': return playList([id], 0, { context: 'Duplicates' });
       case 'new-playlist': return newPlaylist();
@@ -3164,6 +3236,7 @@ document.addEventListener('input', e => {
   }
 });
 document.addEventListener('change', async e => {
+  if (e.target.id === 'set-name') { S.settings.name = e.target.value.trim(); saveSettings(); return toast('Saved'); }
   if (e.target.id === 'check-list') { CHECK.selected = e.target.value; resetCheck(); return render(); }
   if (e.target.id !== 'check-file') return;
   const files = [...e.target.files]; e.target.value = '';
@@ -4678,11 +4751,11 @@ VIEWS.new = () => {
   loadNew();
   const sg = DC.sugg;
   const search = `<label class="search-box dc-search">${icon('search')}<input id="dc-q" class="input" type="search" placeholder="Search any song, artist or album" value="${esc(DC.q)}" autocomplete="off" enterkeyhint="search"></label>`;
-  if (DC.q) return `<div class="page-head"><h1>New</h1></div>${search}<div class="seg q-seg">${[['track', 'Songs'], ['artist', 'Artists'], ['album', 'Albums']].map(([k, l]) => `<button class="${DC.type === k ? 'on' : ''}" data-action="dc-type" data-id="${k}">${l}</button>`).join('')}</div><div id="dc-body">${dcResults()}</div>`;
+  if (DC.q) return `<div class="page-head"><h1>Discover</h1></div>${search}<div class="seg q-seg">${[['track', 'Songs'], ['artist', 'Artists'], ['album', 'Albums']].map(([k, l]) => `<button class="${DC.type === k ? 'on' : ''}" data-action="dc-type" data-id="${k}">${l}</button>`).join('')}</div><div id="dc-body">${dcResults()}</div>`;
   const songs = (DC.newSongs || []).filter(r => r.preview);
   const upd = updatedPlaylists();
   const loading = !sg && !DC.rel;
-  return `<div class="page-head"><h1>New</h1></div>${search}
+  return `<div class="page-head"><h1>Discover</h1></div>${search}
     ${DC.rel?.length ? `<div class="nw-heroes">${DC.rel.slice(0, 8).map(heroRelease).join('')}</div>` : ''}
     ${songs.length ? `<section class="section"><div class="section-head"><h2>Best New Songs for You</h2></div><div class="nw-grid">${songs.map(dcRow).join('')}</div></section>` : ''}
     ${upd.length ? `<section class="section"><div class="section-head"><h2>Updated Playlists</h2></div><div class="shelf">${upd.map(collCard).join('')}</div></section>` : ''}
