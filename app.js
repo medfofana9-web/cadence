@@ -6,6 +6,8 @@ import { Engine, IS_IOS } from './lib/engine.js';
 import { NativeAudio } from './lib/native.js';
 import * as pods from './lib/podcasts.js';
 import * as quran from './lib/quran.js';
+import * as feysal from './lib/feysal.js';
+import { YtAudio } from './lib/yt.js';
 import { Index, fold } from './lib/search.js';
 import { thumbnail, artColors } from './lib/image.js';
 /** The version these files belong to (stamped when published); a phone holding older files updates itself. */
@@ -42,13 +44,14 @@ const DAY = 86400000;
 /** Podcast episodes and Quran recitations play through the same player as songs but aren't part of your library. */
 const T = id => S.tracks.get(id) || S.ext.get(id);
 let extT;
-function saveExt(t) { S.ext.set(t.id, t); clearTimeout(extT); extT = setTimeout(() => kv.set('ext', [...S.ext.values()].slice(-300)), 400); }
+function saveExt(t) { S.ext.set(t.id, t); clearTimeout(extT); extT = setTimeout(() => kv.set('ext', [...S.ext.values()].filter(x => x.kind !== 'yt').slice(-300)), 400); }
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 /** In the installed iPhone app the phone's own player plays the music (gapless, crossfade, solid in the background). */
 const NATIVE = (() => { try { const C = window.Capacitor; return C?.isPluginAvailable?.('FofPlayer') ? C.registerPlugin('FofPlayer') : null; } catch { return null; } })();
-const engine = NATIVE ? new Engine(new NativeAudio(0, NATIVE), new NativeAudio(1, NATIVE)) : new Engine($('#audio'), $('#audio-b'));
+const ytAudio = new YtAudio($('#yt-host'));
+const engine = NATIVE ? new Engine(new NativeAudio(0, NATIVE), new NativeAudio(1, NATIVE), ytAudio) : new Engine($('#audio'), $('#audio-b'), ytAudio);
 if (NATIVE) engine.native = true;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = s => { if (!isFinite(s) || s < 0) s = 0; s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = String(s % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${x}` : `${m}:${x}`; };
@@ -189,14 +192,51 @@ let syncRetryT;
 function syncFailed(e) { console.warn('sync', e); clearTimeout(syncRetryT); syncRetryT = setTimeout(() => { if (S.user) syncDown(); }, 120000); if (Date.now() - syncWarned > 60000) { syncWarned = Date.now(); toast(navigator.onLine ? 'Couldn’t sync just now. Changes are saved here and will sync later.' : 'You’re offline. Changes are saved on this device.'); } }
 
 /* listening state that follows you between devices */
+const DEV = (() => {
+  let id = ''; try { id = localStorage.getItem('fof-dev') || ''; if (!id) { id = uid(); localStorage.setItem('fof-dev', id); } } catch { id = uid(); }
+  const ua = navigator.userAgent;
+  const name = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? 'iPad' : /Android/.test(ua) ? 'Android phone' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'PC' : 'other device';
+  return { id, name };
+})();
+/** What's playing here, so another device can carry on from the same spot. */
+function playerSnap() {
+  if (!P.queue.length || P.idx < 0) return S.remotePlayer || null;
+  const lo = Math.max(0, P.idx - 200);
+  const mine = { queue: P.queue.slice(lo, lo + 500), idx: P.idx - lo, time: Math.round(spotNow()), at: P.activeAt || 0, dev: DEV.id, devName: DEV.name, shuffle: P.shuffle, repeat: P.repeat, context: P.context, contextRoute: P.contextRoute, mode: P.mode, seed: P.seed };
+  // never overwrite a newer spot from another device with an older one from here
+  return (S.remotePlayer?.at || 0) > mine.at ? S.remotePlayer : mine;
+}
+/** Another device played more recently than this one: line up the same queue at the same spot, paused, ready to go. */
+async function adoptPlayer(r) {
+  if (r?.dev !== DEV.id && (r?.at || 0) > (S.remotePlayer?.at || 0)) S.remotePlayer = r;
+  if (!r?.queue?.length || r.dev === DEV.id || (r.at || 0) <= (P.activeAt || 0) + 1000 || !engine.el.paused) return;
+  const curId = r.queue[r.idx]; if (!T(curId)) return;
+  const queue = r.queue.filter(id => T(id)), idx = queue.indexOf(curId);
+  Object.assign(P, { queue, idx, shuffle: !!r.shuffle, repeat: r.repeat || 'off', context: r.context || '', contextRoute: r.contextRoute || '', mode: r.mode || null, seed: r.seed || null, autoAdded: new Set(), activeAt: r.at, resumeId: curId, resumeAt: r.time || 0 });
+  const ok = await loadTrack(curId, { autoplay: false, quiet: true });
+  if (ok && r.time) seekWhenReady(r.time);
+  P.activeAt = r.at; savePlayer(true); paintTime();
+  if (P.panel === 'queue') renderQueue();
+  if (S.route === 'home') render();
+  toast(`Picked up from your ${r.devName || 'other device'}: ${T(curId).title}${r.time > 5 ? ' at ' + fmt(r.time) : ''}`);
+}
+let pullingLight = false;
+/** A quick check for where you left off elsewhere, when you come back to the app. */
+async function pullLight() {
+  if (!S.user || pullingLight || Date.now() - (S.lastPull || 0) < 4000) return;
+  pullingLight = true; S.lastPull = Date.now();
+  try { const st = await cloud.pullState(); if (st?.data) mergeState(st.data); } catch {}
+  pullingLight = false;
+}
 let pushT;
-function queueStatePush() {
+function queueStatePush(now) {
   if (!S.user) return;
   clearTimeout(pushT);
+  P.pushedAt = Date.now();
   pushT = setTimeout(() => {
     const { volume, ...settings } = S.settings;
-    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes, pod: { subs: S.pod.subs, prog: S.pod.prog }, eps: Object.keys(S.pod.prog).slice(-150).map(id => S.ext.get(id)).filter(Boolean).map(({ path, local, ...e }) => e), quran: S.quranSpot || null, quranSaved: S.quranSaved || [], want: (S.want || []).slice(0, 400) }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
-  }, 4000);
+    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes, pod: { subs: S.pod.subs, prog: S.pod.prog }, eps: Object.keys(S.pod.prog).slice(-150).map(id => S.ext.get(id)).filter(Boolean).map(({ path, local, ...e }) => e), quran: S.quranSpot || null, quranSaved: S.quranSaved || [], want: (S.want || []).slice(0, 400), player: playerSnap() }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
+  }, now ? 0 : 4000);
 }
 
 /* =====================================================================
@@ -211,6 +251,7 @@ async function boot() {
   const [tracks, pls, arts, thumbs] = await Promise.all([db.all('tracks'), db.all('playlists'), db.all('art'), db.all('thumbs')]);
   for (const [id, t] of tracks) S.tracks.set(id, t);
   for (const t of await kv.get('ext', [])) { if (t.kind === 'episode') t.title = pods.tidy(t.title); S.ext.set(t.id, t); }
+  for (const t of feysal.all()) S.ext.set(t.id, t);
   S.pod = await kv.get('pod', { subs: [], prog: {}, saved: {} });
   S.quranSpot = await kv.get('quranSpot', null);
   S.quranSaved = await kv.get('quranSaved', []);
@@ -229,7 +270,7 @@ async function boot() {
   if (saved?.queue?.length) {
     P.queue = saved.queue.filter(id => T(id));
     P.idx = Math.min(Math.max(saved.idx, 0), P.queue.length - 1);
-    Object.assign(P, { shuffle: !!saved.shuffle, repeat: saved.repeat || 'off', context: saved.context || '', contextRoute: saved.contextRoute || '', mode: saved.mode || null, seed: saved.seed || null });
+    Object.assign(P, { shuffle: !!saved.shuffle, repeat: saved.repeat || 'off', context: saved.context || '', contextRoute: saved.contextRoute || '', mode: saved.mode || null, seed: saved.seed || null, activeAt: saved.at || 0 });
     P.played = (saved.played || []).filter(id => S.tracks.has(id));
     // remember the spot even if the song can't load yet (on the phone, songs wait for sign-in to finish)
     if (P.idx >= 0 && P.queue.length) { P.resumeId = P.queue[P.idx]; P.resumeAt = saved.time || 0; const ok = await loadTrack(P.queue[P.idx], { autoplay: false, quiet: true }); if (ok && saved.time) seekWhenReady(saved.time); }
@@ -252,7 +293,8 @@ async function boot() {
   // songs that couldn't upload earlier (bad Wi-Fi, signed out) go up on their own
   setInterval(() => autoUpload(), 5 * 60 * 1000);
   setTimeout(autoOffline, 20000); setInterval(autoOffline, 15 * 60 * 1000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkVersion(); if (S.folder && Date.now() - (S.lastScan || 0) > 30000) scanFolder(); if (S.user && Date.now() - S.lastSync > 60000) syncDown(); } else { flushListen(); savePlayer(true); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkVersion(); if (S.folder && Date.now() - (S.lastScan || 0) > 30000) scanFolder(); if (S.user && Date.now() - S.lastSync > 60000) syncDown(); else pullLight(); } else { flushListen(); savePlayer(true); queueStatePush(true); } });
+  addEventListener('focus', () => pullLight());
   window.addEventListener('online', () => { if (S.user) { syncDown(); setTimeout(autoUpload, 5000); } });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (IN_APP) { renewReminder(); siriHooks(); }
@@ -364,6 +406,7 @@ function mergeState(d) {
   if (d.want) { const m = new Map((S.want || []).map(w => [w.key + (w.arrived ? '+' : ''), w])); for (const w of d.want) { const k = w.key + (w.arrived ? '+' : ''); if (!m.has(k) && !(w.arrived ? false : (S.want || []).some(x => x.key === w.key && x.arrived))) m.set(k, w); } S.want = [...m.values()].sort((a, b) => b.at - a.at); kv.set('want', S.want); }
   if (d.quranSaved) { const m = new Map((S.quranSaved || []).map(x => [x.s + ':' + x.v, x])); for (const x of d.quranSaved) if (!m.has(x.s + ':' + x.v)) m.set(x.s + ':' + x.v, x); S.quranSaved = [...m.values()]; kv.set('quranSaved', S.quranSaved); }
   if (d.quran && (d.quran.at || 0) > (S.quranSpot?.at || 0)) { S.quranSpot = d.quran; kv.set('quranSpot', S.quranSpot); }
+  if (d.player) adoptPlayer(d.player);
   kv.set('log', S.log); kv.set('history', S.history); kv.set('ctxs', S.ctxs); kv.set('dupIgnore', S.dupIgnore);
 }
 async function cacheCloudArt(ids) {
@@ -449,7 +492,7 @@ function route(ev) {
   const libRoutes = ['songs', 'artists', 'albums', 'liked', 'playlist', 'artist', 'album', 'library', 'smart', 'insights', 'duplicates', 'history', 'replay', 'import', 'dz-artist', 'dz-album'];
   $$('[data-route]').forEach(a => {
     const r = a.dataset.route;
-    a.classList.toggle('active', r === S.route || (r === 'library' && libRoutes.includes(S.route)) || (r === 'podcasts' && ['show', 'topic'].includes(S.route)));
+    a.classList.toggle('active', r === S.route || (r === 'library' && libRoutes.includes(S.route)) || (r === 'podcasts' && ['show', 'topic'].includes(S.route)) || (r === 'quran' && ['feysal', 'reciters'].includes(S.route)));
   });
   $$('#sidebar-playlists .nav-link').forEach(a => a.classList.toggle('active', (S.route === 'playlist' || S.route === 'smart') && a.dataset.pl === S.param));
   render();
@@ -870,7 +913,7 @@ VIEWS.home = () => {
       <h1 class="ellipsis">${cur ? '<span class="eq hero-eq"><i></i><i></i><i></i></span>' : ''}${esc(hero.title)}</h1><div class="sub ellipsis">${esc(hero.artist)}${hero.album ? ' · ' + esc(hero.album) : ''}</div>
       ${cur ? '<div class="hero-progress"><i id="hero-bar"></i></div>' : ''}
       <div class="row-actions">${cur ? `<button class="btn primary" data-action="toggle"><span class="when-playing"><svg><use href="#i-pause"/></svg>Pause</span><span class="when-paused"><svg><use href="#i-play"/></svg>${resumeAt ? `Resume at ${fmt(resumeAt)}` : 'Resume'}</span></button>` : `<button class="btn primary" data-play-list="${heroKey}" data-i="0"><svg><use href="#i-play"/></svg>Play</button>`}
-      ${hero.kind === 'ayah' || hero.kind === 'surahrec' ? `<a class="btn ghost" href="#/quran/${hero.surah}"><svg><use href="#i-quran"/></svg>Open reader</a>` : hero.kind === 'episode' ? `<a class="btn ghost" href="#/show/${hero.showId}"><svg><use href="#i-podcast"/></svg>Show</a>` : `<button class="btn ghost" data-action="radio" data-id="${hero.id}"><svg><use href="#i-radio"/></svg>Song radio</button>`}</div></div>
+      ${hero.kind === 'ayah' || hero.kind === 'surahrec' ? `<a class="btn ghost" href="#/quran/${hero.surah}"><svg><use href="#i-quran"/></svg>Open reader</a>` : hero.kind === 'episode' ? `<a class="btn ghost" href="#/show/${hero.showId}"><svg><use href="#i-podcast"/></svg>Show</a>` : hero.kind === 'yt' ? `<a class="btn ghost" href="#/feysal/${hero.albumKey}"><svg><use href="#i-quran"/></svg>All recitations</a>` : `<button class="btn ghost" data-action="radio" data-id="${hero.id}"><svg><use href="#i-radio"/></svg>Song radio</button>`}</div></div>
   </section>
   ${S.wantNew ? (() => { const got = wants().filter(w => w.arrived).sort((a, b) => b.arrived - a.arrived).slice(0, S.wantNew); return `<a class="check-banner want-banner" href="#/import/want"><div class="cb-stack">${got.slice(0, 3).map(w => `<img src="${esc(w.art)}" alt="">`).join('')}</div><div><b>${count(S.wantNew)} from your Want list ${S.wantNew === 1 ? 'is' : 'are'} here</b><span>${esc(got.slice(0, 2).map(w => w.title).join(', '))}${S.wantNew > 2 ? ' and more' : ''}</span></div><svg class="chev"><use href="#i-back"/></svg></a>`; })() : ''}
   ${(() => { const n = reviewList().length; return n ? `<a class="check-banner" href="#/review"><div class="cb-stack">${reviewList().slice(0, 3).map(t => `<img src="${artOf(t)}" alt="">`).join('')}</div><div><b>${count(n)} to check</b><span>Quick look at names Fof Music wasn’t sure about</span></div><svg class="chev"><use href="#i-back"/></svg></a>` : ''; })()}
@@ -1070,6 +1113,7 @@ VIEWS.artists = () => {
   return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Artists</h1></div><span class="muted">${g.length}</span></div>${bigGrid(g, ([a, ts]) => collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artistImg(ts, a) }))}`;
 };
 VIEWS.artist = () => {
+  if (S.param === feysal.NAME) return VIEWS.feysal();
   const name = S.param; const ts = groups('creditedArtist').get(name) || [];
   if (!ts.length) return `${back()}<div class="empty-state small"><h2>Artist not found</h2></div>`;
   const popular = [...ts].sort((a, b) => (b.plays || 0) - (a.plays || 0) || (b.liked - a.liked) || byAdded(a, b));
@@ -1089,6 +1133,7 @@ VIEWS.albums = () => {
   return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Albums</h1></div><span class="muted">${g.length}</span></div>${bigGrid(g, ([k, ts]) => { const [al, ar] = k.split('\u0001'); return collCard({ href: 'album/' + k, title: al, sub: ar, tracks: ts }); })}`;
 };
 VIEWS.album = () => {
+  { const [al, ar] = String(S.param).split('\u0001'); if (ar === feysal.NAME) { const a = feysal.ALBUMS.find(x => x.title === al); return VIEWS.feysal(a?.k); } }
   const [al, ar] = S.param.split('\u0001');
   const ts = [...(groups('album').get(S.param) || [])].sort((a, b) => (+a.disc || 1) - (+b.disc || 1) || (+a.trackNo || 999) - (+b.trackNo || 999) || a.title.localeCompare(b.title));
   if (!ts.length) return `${back()}<div class="empty-state small"><h2>Album not found</h2></div>`;
@@ -1780,6 +1825,7 @@ VIEWS.settings = () => {
    Player
    ===================================================================== */
 async function srcFor(t) {
+  if (t.kind === 'yt') return 'yt:' + t.vid;
   if (t.ext) {
     if (t.path) return t.path;
     if (t.local) { const b = await db.get('audio', t.id); if (b) { if (!P.objUrls.has(t.id)) P.objUrls.set(t.id, URL.createObjectURL(b)); return P.objUrls.get(t.id); } }
@@ -1907,7 +1953,7 @@ let saveT;
 function spotNow() { const c = engine.el.currentTime || 0; return c > 0.5 ? c : (P.resumeId && P.resumeId === current()?.id ? P.resumeAt || 0 : c); }
 function savePlayer(now) {
   clearTimeout(saveT);
-  const w = () => kv.set('player', { queue: P.queue, idx: P.idx, shuffle: P.shuffle, repeat: P.repeat, context: P.context, contextRoute: P.contextRoute, mode: P.mode, seed: P.seed, played: P.played.slice(-100), time: spotNow() });
+  const w = () => kv.set('player', { queue: P.queue, idx: P.idx, shuffle: P.shuffle, repeat: P.repeat, context: P.context, contextRoute: P.contextRoute, mode: P.mode, seed: P.seed, played: P.played.slice(-100), time: spotNow(), at: P.activeAt || 0 });
   try { const t = current(); if (t) localStorage.setItem('fof-spot', JSON.stringify({ id: t.id, time: spotNow() })); } catch {}
   if (now) return w();
   saveT = setTimeout(w, 500);
@@ -1923,7 +1969,7 @@ function paintNow(t) {
   $('#now-title').textContent = t.title; $('#now-artist').textContent = t.artist;
   $('#now-mini-title').textContent = t.title; $('#now-mini-artist').textContent = t.artist; $('#now-mini-art').src = artOf(t);
   if (t.ext) delete $('#now-artist').dataset.action; else $('#now-artist').dataset.action = 'artist-more';
-  $('#now-artist').href = t.kind === 'episode' ? '#/show/' + t.showId : t.kind === 'ayah' ? '#/quran/' + t.surah : '#/artist/' + encodeURIComponent(mainArtist(t.artist));
+  $('#now-artist').href = t.kind === 'yt' ? '#/feysal/' + t.albumKey : t.kind === 'episode' ? '#/show/' + t.showId : t.kind === 'ayah' ? '#/quran/' + t.surah : '#/artist/' + encodeURIComponent(mainArtist(t.artist));
   $('#now-from').textContent = P.mode === 'flow' ? 'Fof Flow' : P.context ? 'Playing from ' + P.context : '';
   ['#p-like', '#now-like'].forEach(s => $(s).classList.toggle('on', !!t.liked));
   document.title = `${t.title} · ${t.artist}`;
@@ -2016,7 +2062,8 @@ function paintTime() {
 }
 function onTime() {
   const el = engine.el, d = el.duration || 0, c = el.currentTime || 0;
-  if (!el.paused && Date.now() - lastSpotSave > 5000) { lastSpotSave = Date.now(); savePlayer(true); } // the spot survives the app being closed
+  if (!el.paused && Date.now() - lastSpotSave > 5000) { lastSpotSave = Date.now(); P.activeAt = Date.now(); savePlayer(true); } // the spot survives the app being closed
+  if (!el.paused && S.user && Date.now() - (P.pushedAt || 0) > 90000) queueStatePush(); // other devices see roughly where you are
   paintTime(); qTick(c);
   const t = current();
   if (P.listen && !el.paused) { const now = performance.now(); if (P.tick) P.listen.s += Math.min((now - P.tick) / 1000, 1.5); P.tick = now; }
@@ -2040,14 +2087,14 @@ function onTime() {
   if (t?.kind === 'episode' && d && !el.paused && Math.floor(c) % 5 === 0) podProgress(t, c, d);
   if ('mediaSession' in navigator && d && isFinite(d)) { try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(c, d), playbackRate: el.playbackRate || 1 }); } catch {} }
 }
-for (const el of engine.els) {
+for (const el of engine.all) {
   const mine = fn => e => { if (e.target === engine.el) fn(e); };
   el.addEventListener('timeupdate', mine(onTime));
   el.addEventListener('loadedmetadata', mine(() => { const t = current(); if (t && isFinite(el.duration) && (!t.duration || Math.abs(t.duration - el.duration) > 2)) { t.duration = el.duration; saveTrack(t, { sync: false }); } onTime(); }));
-  el.addEventListener('play', mine(() => { P.tick = 0; updatePlayIcons(); }));
+  el.addEventListener('play', mine(() => { P.tick = 0; P.activeAt = Date.now(); updatePlayIcons(); }));
   // iPhone ignores a jump made before a song starts loading; make it once playback begins
   el.addEventListener('playing', mine(() => { if (P.resumeAt && current()?.id === P.resumeId) { const at = P.resumeAt; P.resumeAt = 0; P.resumeId = null; if (Math.abs(el.currentTime - at) > 2 && (!el.duration || at < el.duration - 1)) el.currentTime = at; } }));
-  el.addEventListener('pause', mine(() => { P.tick = 0; updatePlayIcons(); savePlayer(); }));
+  el.addEventListener('pause', mine(() => { P.tick = 0; P.activeAt = Date.now(); updatePlayIcons(); savePlayer(); queueStatePush(); }));
   el.addEventListener('waiting', mine(() => $('#player').classList.add('buffering')));
   el.addEventListener('playing', mine(() => $('#player').classList.remove('buffering')));
   el.addEventListener('ended', mine(() => {
@@ -2060,6 +2107,7 @@ for (const el of engine.els) {
   }));
   el.addEventListener('error', mine(async () => {
     const src = el.getAttribute('src'); if (!src) return;
+    if (el.error?.noApi) { updatePlayIcons(); toast(navigator.onLine ? 'YouTube isn’t reachable right now. Try again in a moment.' : 'You’re offline. These recitations need the internet.'); return; }
     const t = current(); const code = el.error?.code;
     // the iPhone's player can refuse a streamed song it would happily play once downloaded (missing file type,
     // range quirks): download it once and play that copy instead of skipping
@@ -2104,7 +2152,7 @@ function bindSeek(sel) {
     if (d) {
       if (P.resumeId === current()?.id) P.resumeAt = 0;
       engine.el.currentTime = r.valueAsNumber / 1000 * d;
-      setTimeout(() => savePlayer(true), 300);
+      P.activeAt = Date.now(); setTimeout(() => { savePlayer(true); queueStatePush(); }, 300);
       if (P.lyrics?.lines) syncLyrics(engine.el.currentTime, true);
     }
     paintTime();
@@ -2158,7 +2206,7 @@ $('#p-vol').addEventListener('input', e => { const v = e.target.value / 100; eng
 
 let npArtKey = '', npArtData = '';
 async function nativeNowPlaying(t) {
-  if (!NATIVE || !t) return;
+  if (!NATIVE || !t || engine.ytOn) return;
   const art = artOf(t, 'full'), info = { id: engine.i, title: t.title, artist: t.artist, album: t.album || t.category || '', duration: engine.el.duration || t.duration || 0 };
   if (art && art !== PLACEHOLDER) {
     if (/^https?:/.test(art)) info.art = art;
@@ -2183,8 +2231,35 @@ if (NATIVE) {
   });
   for (const el of engine.els) for (const ev of ['play', 'pause', 'loadedmetadata']) el.addEventListener(ev, () => { if (el === engine.el) nativeNowPlaying(current()); });
 }
+/* The YouTube player stays on screen while it plays: over the artwork in Now Playing, otherwise a small card above the player. */
+let ytRaf = 0, ytFast = 0;
+/** Follows the artwork smoothly for a moment after something moves, then checks a few times a second. */
+function kickYt() { ytFast = performance.now() + 1000; placeYt(); }
+function placeYt() {
+  cancelAnimationFrame(ytRaf); clearTimeout(ytRaf); ytRaf = 0;
+  const h = $('#yt-host'), show = engine.ytOn && h.classList.contains('on');
+  h.classList.toggle('show', show);
+  if (!show) return;
+  const now = $('#now'), open = now.classList.contains('open'), art = $('.now-art');
+  const covered = open && now.classList.contains('panel-open') && innerWidth <= 820;
+  let r = open && !covered ? art.getBoundingClientRect() : null;
+  if (r && r.width < 40) r = null;
+  if (!r) {
+    const w = innerWidth <= 760 ? 176 : 224, ht = Math.round(w * 9 / 16);
+    const pb = open ? { top: innerHeight - 250 } : $('#player').getBoundingClientRect();
+    r = { left: innerWidth - w - 14, top: Math.max(8, pb.top - ht - 12), width: w, height: ht };
+  }
+  h.classList.toggle('big', open);
+  Object.assign(h.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+  ytRaf = performance.now() < ytFast ? requestAnimationFrame(placeYt) : setTimeout(placeYt, 400);
+}
+$('#yt-host').addEventListener('click', () => { if (!$('#now').classList.contains('open')) openNow(); });
+for (const ev of ['play', 'playing', 'pause', 'loadedmetadata']) ytAudio.addEventListener(ev, kickYt);
+addEventListener('resize', kickYt);
+
 function updateMediaSession(t) {
-  if (NATIVE) return nativeNowPlaying(t);
+  kickYt();
+  if (NATIVE && t.kind !== 'yt') return nativeNowPlaying(t);
   if (!('mediaSession' in navigator)) return;
   try { navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist, album: t.album || t.category || '', artwork: [{ src: artOf(t, 'full'), sizes: '1200x1200' }] }); } catch {}
   // a music app: the lock screen and Control Center show previous / next song. Registering the 10-second skips
@@ -2239,12 +2314,13 @@ function openNow(panel) {
   const n = $('#now'); if (!panel && !n.classList.contains('open')) coverFlight(true); n.classList.add('open'); n.setAttribute('aria-hidden', 'false'); document.body.classList.add('now-is-open');
   if (panel) { P.panel = panel; n.classList.add('panel-open'); } else if (innerWidth <= 820) n.classList.remove('panel-open');
   history.pushState({ now: true }, ''); P.nowState = true;
-  renderPanel();
+  renderPanel(); kickYt();
 }
 function closeNow(fromPop) {
   const n = $('#now'); if (!n.classList.contains('open')) return;
   if (!n.classList.contains('panel-open')) coverFlight(false);
   n.classList.remove('open', 'panel-open', 'lyrics-full'); n.setAttribute('aria-hidden', 'true'); document.body.classList.remove('now-is-open');
+  kickYt();
   if (!fromPop && P.nowState) { P.nowState = false; history.back(); }
 }
 window.addEventListener('popstate', () => { if ($('#now').classList.contains('open')) { P.nowState = false; closeNow(true); } });
@@ -2834,7 +2910,7 @@ document.addEventListener('click', async e => {
       case 'open-queue': return openNow('queue');
       case 'tab-lyrics': case 'tab-queue': case 'tab-artist': {
         const p = a.dataset.action.slice(4); const n = $('#now');
-        if (innerWidth <= 820 && n.classList.contains('panel-open') && P.panel === p) n.classList.remove('panel-open'); else { P.panel = p; n.classList.add('panel-open'); }
+        if (innerWidth <= 820 && n.classList.contains('panel-open') && P.panel === p) n.classList.remove('panel-open'); else { P.panel = p; n.classList.add('panel-open'); } kickYt();
         if (p === 'queue') n.classList.remove('lyrics-full');
         if (p !== 'lyrics') n.classList.remove('lyrics-full');
         for (const k of ['lyrics', 'artist', 'queue']) $('#ic-' + k)?.classList.toggle('on-panel', n.classList.contains('panel-open') && P.panel === k);
@@ -3238,6 +3314,18 @@ const initials = n => n.replace(/^(sheikh|shaik|shaikh)\s+/i, '').split(/[\s-]+/
 const AV_COLORS = [['#1f3b33', '#9fd1bf'], ['#3d3320', '#e6c98a'], ['#2a2f45', '#b7c2f0'], ['#3a2430', '#efb6cb'], ['#203a3a', '#9fd8d8'], ['#33283f', '#cdb8ee'], ['#3d2a20', '#f0c2a2'], ['#2f3320', '#d6e09a']];
 const avatar = (r, cls = '') => { let h = 0; for (const c of r.name) h = (h * 31 + c.charCodeAt(0)) | 0; const [bg, fg] = AV_COLORS[Math.abs(h) % AV_COLORS.length]; return `<span class="q-av ${cls}" style="background:${bg};color:${fg}">${esc(initials(r.name))}</span>`; };
 
+/** Imam Feysal Mohammed: his recitations, streamed from Tarteel Network's YouTube uploads. */
+VIEWS.feysal = (tab) => {
+  const cat = feysal.catalog(), k = cat[tab || S.param] ? (tab || S.param) : 'complete', al = feysal.ALBUMS.find(a => a.k === k);
+  const tracks = cat[k], total = feysal.all().length, mins = Math.round(tracks.reduce((n, t) => n + t.duration, 0) / 60);
+  const cur = current(), here = cur?.kind === 'yt' ? cur : null;
+  return `${back()}${collHead({ img: tracks[0].art, tracks, eyebrow: 'Reciter', title: feysal.NAME, ctxRoute: 'feysal/' + k,
+    meta: `${esc(al.title)} · ${tracks.length} surahs · ${mins >= 60 ? Math.floor(mins / 60) + ' hr ' + (mins % 60) + ' min' : mins + ' min'} · ${total} recitations in all` })}
+    ${here && here.albumKey !== k ? `<a class="q-continue fy-now" href="#/feysal/${here.albumKey}"><div><div class="q-c-eyebrow">Now playing</div><div class="q-c-t">${esc(here.title)}</div><div class="q-c-s">${esc(here.album)}</div></div><span class="q-c-play">${icon('play')}</span></a>` : ''}
+    <div class="seg q-seg fy-seg" role="tablist">${feysal.ALBUMS.map(a => `<a role="tab" aria-selected="${a.k === k}" class="${a.k === k ? 'on' : ''}" href="#/feysal/${a.k}">${esc(a.tab)}</a>`).join('')}</div>
+    ${trackRows(tracks, { cols: [], context: feysal.NAME + ' · ' + al.title, key: 'fy-' + k })}
+    <p class="muted fy-note">Streams from Tarteel Network on YouTube. Needs an internet connection.</p>`;
+};
 VIEWS.quran = () => {
   if (S.param) { const [n, v] = String(S.param).split('.').map(Number); if (v) QR.scrollTo = v; return quranReader(n); }
   const list = qList(), spot = S.quranSpot, r = rec(); qRecs();
@@ -3260,7 +3348,8 @@ VIEWS.quran = () => {
   return `<div class="page-head"><h1>Quran</h1></div>
     ${sname ? `<div class="q-continue" data-action="q-resume"><div><div class="q-c-eyebrow">Continue · ${esc(recById(spot.reciter || reciterId())?.name || r.name)}</div><div class="q-c-t">${esc(sname.englishName)}</div><div class="q-c-s">Verse ${spot.ayah} of ${sname.numberOfAyahs}</div><div class="q-c-bar"><i style="width:${Math.max(2, spot.ayah / sname.numberOfAyahs * 100)}%"></i></div></div><span class="q-c-play">${icon('play')}</span></div>` : ''}
     ${d?.ar ? `<a class="q-daily" href="#/quran/${d.s}.${d.v}"><div class="q-daily-ref">Verse of the day · ${esc(d.name)} ${d.v}</div><div class="q-daily-ar" dir="rtl" lang="ar">${esc(d.ar)}</div><div class="q-daily-en">${esc(d.en)}</div></a>` : ''}
-    <div class="settings-group q-group"><a class="set-row" href="#/reciters"><span>Reciter</span><span class="set-val">${esc(r.name)}${icon('back', 'chev')}</span></a></div>
+    <div class="settings-group q-group"><a class="set-row" href="#/reciters"><span>Reciter</span><span class="set-val">${esc(r.name)}${icon('back', 'chev')}</span></a>
+      <a class="set-row fy-row" href="#/feysal"><span class="fy-row-main"><img src="${feysal.catalog().complete[11].art}" alt=""><span><b>${esc(feysal.NAME)}</b><em>${feysal.all().length} recitations</em></span></span>${icon('back', 'chev')}</a></div>
     <div class="seg q-seg" role="tablist">${[['surah', 'Surah'], ['juz', 'Juz'], ['saved', 'Saved']].map(([k, l]) => `<button role="tab" aria-selected="${QR.tab === k}" class="${QR.tab === k ? 'on' : ''}" data-action="q-tab" data-id="${k}">${l}</button>`).join('')}</div>
     ${QR.tab === 'surah' ? `<label class="search-box q-search">${icon('search')}<input id="q-find" class="input" type="search" placeholder="Surah name or number" value="${esc(QR.q)}" autocomplete="off" enterkeyhint="search"></label>` : ''}
     <div id="q-body">${body}</div>`;
