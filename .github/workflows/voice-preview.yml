@@ -1,0 +1,45 @@
+name: Voice preview (private text)
+# The book text never goes into this public repo in readable form. This job makes a one-time key pair, publishes only
+# the public half, waits for the text encrypted to that key, renders, and returns the audio encrypted to the owner's key.
+on:
+  push:
+    branches: [voice-preview]
+permissions:
+  contents: write
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq espeak-ng ffmpeg
+      - run: |
+          pip install -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -q chatterbox-tts kokoro soundfile faster-whisper librosa
+      - name: Warm models
+        run: python tools/preview.py warm
+      - name: One-time key, wait for encrypted text
+        run: |
+          umask 077; openssl genrsa -out /tmp/run.key 3072 2>/dev/null; openssl rsa -in /tmp/run.key -pubout -out run.pub 2>/dev/null
+          git config user.name fof-bot; git config user.email bot@users.noreply.github.com
+          git fetch -q origin; git checkout -q --orphan voice-preview-key; git rm -rfq . >/dev/null; git add run.pub; git commit -qm "run key $GITHUB_RUN_ID"; git push -qf origin voice-preview-key
+          git checkout -q -f voice-preview
+          for i in $(seq 1 120); do
+            if git fetch -q origin voice-preview-in 2>/dev/null && git show FETCH_HEAD:key.enc > /tmp/key.enc 2>/dev/null && git show FETCH_HEAD:text.enc > /tmp/text.enc 2>/dev/null && git show FETCH_HEAD:run.txt 2>/dev/null | grep -qx "$GITHUB_RUN_ID"; then break; fi
+            sleep 15
+          done
+          openssl pkeyutl -decrypt -inkey /tmp/run.key -pkeyopt rsa_padding_mode:oaep -in /tmp/key.enc -out /tmp/aes.key
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass file:/tmp/aes.key -in /tmp/text.enc -out /tmp/text.txt
+          echo "text received ($(wc -w < /tmp/text.txt) words)"
+      - name: Render previews
+        run: python tools/preview.py render /tmp/text.txt out
+      - name: Encrypt audio to the owner's key
+        run: |
+          umask 077; openssl rand -hex 32 > /tmp/out.key
+          tar -cf /tmp/out.tar out
+          openssl enc -aes-256-cbc -pbkdf2 -pass file:/tmp/out.key -in /tmp/out.tar -out audio.enc
+          openssl pkeyutl -encrypt -pubin -inkey tools/me.pub -pkeyopt rsa_padding_mode:oaep -in /tmp/out.key -out audio.key.enc
+      - uses: actions/upload-artifact@v4
+        with: { name: voice-preview, path: "audio.enc\naudio.key.enc" }
