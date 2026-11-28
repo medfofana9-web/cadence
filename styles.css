@@ -1403,10 +1403,13 @@ body:not(.is-paused) .dr-play .when-paused{display:none}
 .vl-chunk{position:absolute;left:0;right:0;top:0;contain:layout paint}
 
 /* YouTube recitations: the video sits on the artwork in Now Playing, and as a small card above the player otherwise */
-#yt-host{position:fixed;left:0;top:0;width:0;height:0;z-index:60;display:none;background:#000;border-radius:14px;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.5);cursor:pointer;transition:border-radius .3s var(--ease)}
+#yt-host{position:fixed;left:0;top:0;width:0;height:0;z-index:60;display:none;background:#000;border-radius:14px;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.5);transition:border-radius .3s var(--ease)}
 #yt-host.on.show{display:block}
-#yt-host.big{z-index:1000;cursor:default;box-shadow:none}
-#yt-host iframe{width:100%;height:100%;border:0;pointer-events:none;display:block}
+#yt-host.big{z-index:1000;box-shadow:none}
+#yt-host iframe{width:100%;height:100%;border:0;display:block}
+.yt-open{position:absolute;top:6px;left:6px;width:30px;height:30px;border-radius:50%;background:rgba(0,0,0,.55);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:grid;place-items:center;color:#fff;z-index:2}
+.yt-open svg{width:15px;height:15px}
+#yt-host.big .yt-open{display:none}
 .fy-row-main{display:flex;align-items:center;gap:12px;min-width:0}
 .fy-row-main img{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:none}
 .fy-row-main span{display:flex;flex-direction:column;min-width:0}

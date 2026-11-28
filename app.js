@@ -2253,7 +2253,8 @@ function placeYt() {
   Object.assign(h.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
   ytRaf = performance.now() < ytFast ? requestAnimationFrame(placeYt) : setTimeout(placeYt, 400);
 }
-$('#yt-host').addEventListener('click', () => { if (!$('#now').classList.contains('open')) openNow(); });
+$('#yt-host').insertAdjacentHTML('beforeend', '<button class="yt-open" data-action="yt-open" aria-label="Open Now Playing"><svg><use href="#i-expand"/></svg></button>');
+$('#yt-host .yt-open').addEventListener('click', e => { e.stopPropagation(); openNow(); });
 for (const ev of ['play', 'playing', 'pause', 'loadedmetadata']) ytAudio.addEventListener(ev, kickYt);
 addEventListener('resize', kickYt);
 
