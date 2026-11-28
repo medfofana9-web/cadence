@@ -575,6 +575,7 @@ function afterRender() {
   if (S.route === 'import' && $('#drop')) bindImport();
   if (S.route === 'new') bindDiscover();
   if (S.route === 'podcasts') bindPodSearch();
+  if (S.route === 'books') { const q = $('#bk-q'), so = $('#bk-sort'); if (q) q.oninput = () => { S.bookQ = q.value; clearTimeout(q._t); q._t = setTimeout(() => { render(); const n = $('#bk-q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250); }; if (so) so.onchange = () => { S.bookSort = so.value; render(); }; }
   if (S.route === 'quran' || S.route === 'reciters') bindQuran();
   paintTime();
   requestAnimationFrame(() => $$('.shelf').forEach(sh => sh.closest('.section')?.classList.toggle('fits', sh.scrollWidth <= sh.clientWidth + 4)));
@@ -2257,7 +2258,7 @@ $('#p-vol').addEventListener('input', e => { const v = e.target.value / 100; eng
 let npArtKey = '', npArtData = '';
 async function nativeNowPlaying(t) {
   if (!NATIVE || !t || engine.ytOn) return;
-  const art = artOf(t, 'full'), info = { id: engine.i, title: t.title, artist: t.artist, album: t.album || t.category || '', duration: engine.el.duration || t.duration || 0 };
+  const art = artOf(t, 'full'), info = { id: engine.i, title: t.title, artist: t.artist, album: t.album || t.category || '', duration: engine.el.duration || t.duration || 0, book: isBook(t) };
   if (art && art !== PLACEHOLDER) {
     if (/^https?:/.test(art)) info.art = art;
     else {
@@ -2278,6 +2279,8 @@ if (NATIVE) {
     else if (a === 'next') next();
     else if (a === 'prev') prev();
     else if (a === 'seek' && isFinite(e.time)) el.currentTime = e.time;
+    else if (a === 'back15') el.currentTime = Math.max(0, el.currentTime - 15);
+    else if (a === 'fwd30') el.currentTime = Math.min((el.duration || 1e9) - 1, el.currentTime + 30);
   });
   for (const el of engine.els) for (const ev of ['play', 'pause', 'loadedmetadata']) el.addEventListener(ev, () => { if (el === engine.el) nativeNowPlaying(current()); });
 }
@@ -2315,7 +2318,8 @@ function updateMediaSession(t) {
   try { navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist, album: t.album || t.category || '', artwork: [{ src: artOf(t, 'full'), sizes: '1200x1200' }] }); } catch {}
   // a music app: the lock screen and Control Center show previous / next song. Registering the 10-second skips
   // makes iPhone show those instead, so they are left off.
-  const h = { play: () => engine.el.play(), pause: () => engine.el.pause(), previoustrack: prev, nexttrack: () => next(), seekto: e => { engine.el.currentTime = e.seekTime; }, seekbackward: null, seekforward: null };
+  const bk = isBook(t), el = engine.el; // books: 15 / 30 second skips on the lock screen, like Audible
+  const h = { play: () => el.play(), pause: () => el.pause(), previoustrack: bk ? null : prev, nexttrack: bk ? null : () => next(), seekto: e => { engine.el.currentTime = e.seekTime; }, seekbackward: bk ? () => { engine.el.currentTime = Math.max(0, engine.el.currentTime - 15); } : null, seekforward: bk ? () => { engine.el.currentTime += 30; } : null };
   for (const [k, f] of Object.entries(h)) { try { navigator.mediaSession.setActionHandler(k, f); } catch {} }
 }
 
@@ -3461,7 +3465,20 @@ function ttsVoice() {
 }
 function ttsStop() { TTS.on = false; TTS.n++; ttsHalt(); if (RD.id) rdControls(); }
 let AC = null;
-const sayText = x => x.replace(/[—–]/g, ', ').replace(/\b([Ff])\*ck/g, '$1uck').replace(/\bMr\./g, 'Mister').replace(/\bDr\./g, 'Doctor').replace(/[*_#[\]]/g, '');
+// the "director": say names, numbers and pauses the way a narrator would
+const ONES = 'zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen'.split(' '), TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+const numW = n => n < 20 ? ONES[n] : n < 100 ? TENS[Math.floor(n / 10)] + (n % 10 ? '-' + ONES[n % 10] : '') : n < 1000 ? ONES[Math.floor(n / 100)] + ' hundred' + (n % 100 ? ' ' + numW(n % 100) : '') : String(n);
+const yearW = n => n >= 2000 && n <= 2009 ? 'two thousand' + (n % 10 ? ' ' + ONES[n % 10] : '') : numW(Math.floor(n / 100)) + ' ' + (n % 100 === 0 ? 'hundred' : n % 100 < 10 ? 'oh ' + ONES[n % 100] : numW(n % 100));
+const ROM = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10, XI: 11, XII: 12, XIII: 13, XIV: 14, XV: 15, XVI: 16, XVII: 17, XVIII: 18 };
+const ORDW = ['', 'First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth', 'Ninth', 'Tenth', 'Eleventh', 'Twelfth', 'Thirteenth', 'Fourteenth', 'Fifteenth', 'Sixteenth', 'Seventeenth', 'Eighteenth'];
+const RULERS = /^(Louis|Henry|Charles|Elizabeth|George|Edward|William|Richard|James|Philip|Frederick|Napoleon|Pope|Peter|Ivan|Alexander|Leo|Pius|Gregory|John|Mary|Catherine|Ferdinand|Francis)$/;
+const sayText = x => x
+  .replace(/\b([A-Z][a-z]+) ([IVX]{1,5})\b/g, (m, a, r) => RULERS.test(a) && ROM[r] ? `${a} the ${ORDW[ROM[r]]}` : m)
+  .replace(/\b(Law|Chapter|Part|Book|Rule|Lesson|Step) (\d{1,3})\b/g, (m, a, n) => `${a} ${numW(+n).replace(/^./, c => c.toUpperCase())}`)
+  .replace(/\b(1[1-9]\d\d|20\d\d)s\b/g, (m, y) => yearW(+y).replace(/y$/, 'ie') + 's')
+  .replace(/\b(in|of|by|since|until|from|to|year|around) (1[1-9]\d\d|20\d\d)\b/g, (m, a, y) => `${a} ${yearW(+y)}`)
+  .replace(/\bMr\./g, 'Mister').replace(/\bMrs\./g, 'Missus').replace(/\bDr\./g, 'Doctor').replace(/\be\.g\./g, 'for example').replace(/\bi\.e\./g, 'that is').replace(/&/g, ' and ').replace(/%/g, ' percent')
+  .replace(/\s*[—–]\s*/g, ', ').replace(/\b([Ff])\*ck/g, '$1uck').replace(/\b([Ss])h\*t/g, '$1hit').replace(/[*_#[\]]/g, '');
 /** Plays the chapter from sentence i in the voice you picked for this book, a sentence or two ahead so there are no gaps. */
 async function ttsFrom(i) {
   const t = rdT(RD.id), s = rdText(t); if (!s) return;
@@ -3686,13 +3703,15 @@ const BOOK_HOW = `Tap <b>Add a book</b> and pick an EPUB or PDF, on your iPhone 
 /** A book still being narrated on the Mac (matched to the queue item by its title). */
 const qKey = s => fold(String(s || '').replace(/\(.*?\)/g, '').replace(/^the /i, '')).replace(/[^a-z0-9]/g, '').slice(0, 24);
 function narratingFor(album) { const k = qKey(album); return (S.bookQueue || []).find(b => b.status !== 'done' && b.status !== 'failed' && (qKey(b.name).startsWith(k) || k.startsWith(qKey(b.name)))); }
+const ofTotal = line => +((/of (\d+)/.exec(line || '') || [])[1] || 0);
+const readyTxt = (ch, q) => { const n = ofTotal(q?.line); return n ? `${ch.length} of ${n} chapters ready` : `${ch.length} chapter${ch.length === 1 ? '' : 's'} ready`; };
 const pctOf = line => { const m = /Chapter (\d+) of (\d+)/.exec(line || ''); return m ? Math.round((+m[1] - 1) / +m[2] * 100) : 0; };
 function ring(pct, color) { const c = 2 * Math.PI * 14, d = Math.max(2, c * pct / 100); return `<svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="14" fill="none" stroke="rgba(255,255,255,.25)" stroke-width="3"/><circle cx="18" cy="18" r="14" fill="none" stroke="${color}" stroke-width="3" stroke-dasharray="${d} ${c}" transform="rotate(-90 18 18)" stroke-linecap="round"/></svg>`; }
 function bookTile([key, ch]) {
   const t = ch[0], st = bookStats(key), sp = bookSpot(key), q = narratingFor(t.album), playing = ch.some(c => c.id === current()?.id) && !engine.el.paused;
   const badge = q ? `<span class="bt-badge">${ring(pctOf(q.line), '#ff9f0a')}</span>`
     : `<button class="bt-badge bt-play" data-action="book-play" data-book="${esc(key)}" aria-label="${playing ? 'Pause' : 'Listen'}">${sp?.started && !sp.finished ? ring(st.pct, '#fff') : ''}${icon(playing ? 'pause' : 'play')}</button>`;
-  const sub = q ? `Narrating · ${q.line && /Chapter/.test(q.line) ? pctOf(q.line) + '%' : 'starting'}` : sp?.finished ? 'Finished' : sp?.started ? `${Math.round(st.pct)}% · ${leftTxt(st.left)} left` : `${t.artist} · ${leftTxt(st.total)}`;
+  const sub = q ? `Preparing · ${readyTxt(ch, q)}` : sp?.finished ? 'Finished' : sp?.started ? `${Math.round(st.pct)}% · ${leftTxt(st.left)} left` : `${t.artist} · ${leftTxt(st.total)}`;
   return `<div class="bt"><div class="bt-art"><a class="bt-cover" href="#/book/${encodeURIComponent(key)}">${bookCover(t, 'big')}</a>${badge}</div>
     <a class="bt-t ellipsis" href="#/book/${encodeURIComponent(key)}">${esc(t.album || t.title)}</a><div class="bt-s ellipsis">${esc(sub)}</div></div>`;
 }
@@ -3720,18 +3739,19 @@ VIEWS.books = () => {
   if (pick) {
     const [k, ch, sp] = pick, st = bookStats(k), t = ch[sp.i] || ch[0], playing = ch.some(c => c.id === current()?.id) && !engine.el.paused;
     hero = `<div class="bk-hero-row"><a href="#/book/${encodeURIComponent(k)}">${bookCover(t, 'big')}</a><div class="bk-hero-meta">
-        <div class="bk-eb">${sp.started && !sp.finished ? 'Continue listening' : 'Start listening'}</div><a class="bk-ht" href="#/book/${encodeURIComponent(k)}">${esc(t.album || t.title)}</a><div class="bk-ha">${esc(t.artist)}</div>
+        <div class="bk-eb">${sp.started && !sp.finished ? 'Continue listening' : narratingFor(t.album) ? 'Preparing · ' + readyTxt(ch, narratingFor(t.album)) : 'Start listening'}</div><a class="bk-ht" href="#/book/${encodeURIComponent(k)}">${esc(t.album || t.title)}</a><div class="bk-ha">${esc(t.artist)}</div>
         <div class="bk-hc ellipsis">${esc(t.title)}</div><div class="bk-hp"><span class="pod-bar"><i style="width:${st.pct}%"></i></span>${esc(leftTxt(sp.started ? st.left : st.total))}${sp.started ? ' left' : ''}</div></div></div>
       <div class="bk-acts"><button class="bk-btn light" data-action="book-play" data-book="${esc(k)}">${icon(playing ? 'pause' : 'play')}${playing ? 'Pause' : 'Listen'}</button><button class="bk-btn glass" data-action="book-read" data-book="${esc(k)}">${icon('read')}Read</button></div>`;
   }
   const f = S.bookFilter || 'all';
-  const list = all.filter(([, ch, sp]) => f === 'all' || (f === 'listening' && sp?.started && !sp.finished) || (f === 'finished' && sp?.finished) || (f === 'narrating' && narratingFor(ch[0].album)));
+  const bq = fold(S.bookQ || ''), sortBy = S.bookSort || 'recent';
+  const list = all.filter(([, ch]) => !bq || fold(`${ch[0].album} ${ch[0].artist}`).includes(bq)).sort((a, b) => sortBy === 'title' ? (a[1][0].album || '').localeCompare(b[1][0].album || '') : sortBy === 'author' ? (a[1][0].artist || '').localeCompare(b[1][0].artist || '') : (b[2]?.at || b[1][0].addedAt || 0) - (a[2]?.at || a[1][0].addedAt || 0)).filter(([, ch, sp]) => f === 'all' || (f === 'listening' && sp?.started && !sp.finished) || (f === 'finished' && sp?.finished) || (f === 'narrating' && narratingFor(ch[0].album)));
   const tiles = [...(f === 'all' || f === 'narrating' ? pending.map(queueTile) : []), ...list.map(([k, ch]) => bookTile([k, ch]))];
   const chips = [['all', 'All'], ['listening', 'Listening'], ['narrating', 'Narrating'], ['finished', 'Finished']].map(([k, l]) => `<button class="chip ${f === k ? 'on' : ''}" data-action="book-filter" data-f="${k}">${l}</button>`).join('');
   const lead = pick ? pick[1][pick[2].i] || pick[1][0] : null, bg = lead ? artOf(lead, 'full') : vGoing?.[0].cover;
   return `<section class="bk-hero">${bg ? `<div class="bk-hero-bg"><img src="${bg}" alt=""></div>` : ''}<div class="bk-hero-in">
       <div class="bk-top"><h1>Audiobooks</h1>${add}</div>${hero}</div></section>
-    <div class="chips bk-chips">${chips}</div>
+    <div class="bk-tools"><div class="chips bk-chips">${chips}</div><div class="bk-find"><label class="bk-search">${icon('search')}<input id="bk-q" type="search" placeholder="Search books" value="${esc(S.bookQ || '')}" autocomplete="off"></label><select id="bk-sort" class="bk-sort" aria-label="Sort">${[['recent', 'Recent'], ['title', 'Title'], ['author', 'Author']].map(([k, l]) => `<option value="${k}" ${sortBy === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
     ${tiles.length ? `<div class="bk-grid">${tiles.join('')}</div>` : `<p class="muted bk-none">No books here yet.</p>`}
     <p class="muted book-how">${BOOK_HOW}</p>`;
 };
@@ -3742,7 +3762,7 @@ VIEWS.book = () => {
   const label = playingHere ? 'Pause' : sp.finished ? 'Listen again' : sp.started ? 'Resume' : 'Start listening';
   return `<section class="bk-detail"><div class="bk-hero-bg"><img src="${artOf(t0, 'full')}" alt=""></div><div class="bk-detail-in">${back()}
       ${bookCover(t0, 'big')}<h1>${esc(t0.album || t0.title)}</h1><div class="bk-ha">${esc(t0.artist)}</div>
-      <div class="bk-facts">${ch.length} chapter${ch.length === 1 ? '' : 's'} · ${esc(leftTxt(st.total))}${sp.started && !sp.finished ? ` · ${esc(leftTxt(st.left))} left` : ''}${q ? ' · still narrating' : ''}</div>
+      <div class="bk-facts">${ch.length} chapter${ch.length === 1 ? '' : 's'} · ${esc(leftTxt(st.total))}${sp.started && !sp.finished ? ` · ${esc(leftTxt(st.left))} left` : ''}${q ? ` · ${readyTxt(ch, q)}, more on the way` : ''}</div>
       ${sp.started && !sp.finished ? `<div class="bk-dp"><span class="pod-bar"><i style="width:${st.pct}%"></i></span></div><div class="bk-at ellipsis">${esc(ch[sp.i].title)}</div>` : ''}
       <div class="bk-acts"><button class="bk-btn light" data-action="book-play" data-book="${esc(key)}">${icon(playingHere ? 'pause' : 'play')}${label}</button><button class="bk-btn glass" data-action="book-read" data-book="${esc(key)}">${icon('read')}Read</button></div>
       ${sp.started ? `<button class="link bk-restart" data-action="book-restart" data-book="${esc(key)}">Start over</button>` : ''}</div></section>

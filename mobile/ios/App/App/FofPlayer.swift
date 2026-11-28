@@ -178,6 +178,8 @@ public class FofPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func nowPlaying(_ call: CAPPluginCall) {
         let i = call.getInt("id") ?? active
         active = i
+        let book = call.getBool("book") ?? false
+        DispatchQueue.main.async { self.setupRemote(); self.setBookMode(book) }
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: call.getString("title") ?? "",
             MPMediaItemPropertyArtist: call.getString("artist") ?? "",
@@ -234,8 +236,19 @@ public class FofPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         r.nextTrackCommand.addTarget { _ in send("next", nil) }
         r.previousTrackCommand.addTarget { _ in send("prev", nil) }
         r.changePlaybackPositionCommand.addTarget { e in send("seek", (e as? MPChangePlaybackPositionCommandEvent)?.positionTime) }
-        r.skipForwardCommand.isEnabled = false
-        r.skipBackwardCommand.isEnabled = false
+        r.skipForwardCommand.preferredIntervals = [30]
+        r.skipBackwardCommand.preferredIntervals = [15]
+        r.skipForwardCommand.addTarget { _ in send("fwd30", nil) }
+        r.skipBackwardCommand.addTarget { _ in send("back15", nil) }
+        setBookMode(false)
+    }
+    /// Audiobooks show 15 / 30 second skips on the lock screen instead of previous / next track.
+    private func setBookMode(_ on: Bool) {
+        let r = MPRemoteCommandCenter.shared()
+        r.skipForwardCommand.isEnabled = on
+        r.skipBackwardCommand.isEnabled = on
+        r.nextTrackCommand.isEnabled = !on
+        r.previousTrackCommand.isEnabled = !on
     }
 
     // MARK: calls, Siri, unplugged headphones

@@ -1657,3 +1657,11 @@ body:not(.is-paused) .dr-play .when-paused{display:none}
 .rd-voice{display:none}
 .rd-textonly .rd-voice{display:inline-block}
 .voice-pick .btn svg{width:16px;height:16px}
+.bk-tools{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 18px;flex-wrap:wrap}
+.bk-tools .bk-chips{margin:0}
+.bk-find{display:flex;gap:8px;align-items:center}
+.bk-search{display:flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:17px;background:rgba(127,127,127,.12)}
+.bk-search svg{width:15px;height:15px;color:var(--muted)}
+.bk-search input{border:0;background:none;color:var(--text);font:inherit;font-size:13.5px;width:150px;outline:none}
+.bk-sort{height:34px;border-radius:17px;border:0;padding:0 12px;background:rgba(127,127,127,.12);color:var(--text);font:inherit;font-size:13.5px}
+@media (max-width:700px){.bk-find{width:100%}.bk-search{flex:1}.bk-search input{width:100%}}
