@@ -2909,6 +2909,7 @@ document.addEventListener('click', async e => {
       case 'skip-back': { const el = engine.el; el.currentTime = Math.max(0, el.currentTime - 15); return; }
       case 'skip-fwd': { const el = engine.el; el.currentTime = Math.min((el.duration || 1e9) - 1, el.currentTime + 30); return; }
       case 'book-restart': return bookRestart(a.dataset.book);
+      case 'book-filter': S.bookFilter = a.dataset.f; return render();
       case 'book-read': { const ch = bookChapters(a.dataset.book); const c = ch.find(x => x.id === current()?.id) || ch[bookSpot(a.dataset.book).i]; return c && openReader(c.id); }
       case 'read-now': return current() && openReader(current().id);
       case 'rd-open': RD.id = id; return paintReader();
@@ -3513,35 +3514,61 @@ function rdLook() {
   });
 }
 const BOOK_HOW = `Tap <b>Add a book</b> and pick an EPUB or PDF, on your iPhone or your Mac. Your Mac reads it aloud chapter by chapter in the background, and the chapters show up here on all your devices. EPUB files sound best.`;
+/** A book still being narrated on the Mac (matched to the queue item by its title). */
+const qKey = s => fold(String(s || '').replace(/\(.*?\)/g, '').replace(/^the /i, '')).replace(/[^a-z0-9]/g, '').slice(0, 24);
+function narratingFor(album) { const k = qKey(album); return (S.bookQueue || []).find(b => b.status !== 'done' && b.status !== 'failed' && (qKey(b.name).startsWith(k) || k.startsWith(qKey(b.name)))); }
+const pctOf = line => { const m = /Chapter (\d+) of (\d+)/.exec(line || ''); return m ? Math.round((+m[1] - 1) / +m[2] * 100) : 0; };
+function ring(pct, color) { const c = 2 * Math.PI * 14, d = Math.max(2, c * pct / 100); return `<svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="14" fill="none" stroke="rgba(255,255,255,.25)" stroke-width="3"/><circle cx="18" cy="18" r="14" fill="none" stroke="${color}" stroke-width="3" stroke-dasharray="${d} ${c}" transform="rotate(-90 18 18)" stroke-linecap="round"/></svg>`; }
+function bookTile([key, ch]) {
+  const t = ch[0], st = bookStats(key), sp = bookSpot(key), q = narratingFor(t.album), playing = ch.some(c => c.id === current()?.id) && !engine.el.paused;
+  const badge = q ? `<span class="bt-badge">${ring(pctOf(q.line), '#ff9f0a')}</span>`
+    : `<button class="bt-badge bt-play" data-action="book-play" data-book="${esc(key)}" aria-label="${playing ? 'Pause' : 'Listen'}">${sp?.started && !sp.finished ? ring(st.pct, '#fff') : ''}${icon(playing ? 'pause' : 'play')}</button>`;
+  const sub = q ? `Narrating · ${q.line && /Chapter/.test(q.line) ? pctOf(q.line) + '%' : 'starting'}` : sp?.finished ? 'Finished' : sp?.started ? `${Math.round(st.pct)}% · ${leftTxt(st.left)} left` : `${t.artist} · ${leftTxt(st.total)}`;
+  return `<div class="bt"><div class="bt-art"><a class="bt-cover" href="#/book/${encodeURIComponent(key)}">${bookCover(t, 'big')}</a>${badge}</div>
+    <a class="bt-t ellipsis" href="#/book/${encodeURIComponent(key)}">${esc(t.album || t.title)}</a><div class="bt-s ellipsis">${esc(sub)}</div></div>`;
+}
+function queueTile(b) {
+  return `<div class="bt"><div class="bt-art"><div class="bt-cover"><div class="book-cover big bt-blank"><span>${esc(b.name.replace(/\s*\(.*$/, ''))}</span></div></div><span class="bt-badge">${b.status === 'waiting' ? icon('book') : ring(pctOf(b.line), '#ff9f0a')}</span></div>
+    <div class="bt-t ellipsis">${esc(b.name.replace(/\s*\(.*$/, ''))}</div><div class="bt-s ellipsis">${b.status === 'waiting' ? 'Waiting for your Mac' : b.status === 'failed' ? 'Couldn’t narrate this one' : 'Narrating on your Mac'}</div></div>`;
+}
 VIEWS.books = () => {
   const all = [...books()].map(([k, ch]) => [k, ch, bookSpot(k)]);
+  const pending = (S.bookQueue || []).filter(b => b.status !== 'done' && !all.some(([, ch]) => narratingFor(ch[0].album) === b));
+  const add = `<button class="pill-btn bk-add" data-action="add-book">${icon('plus')}Add a book</button>`;
+  if (!all.length && !pending.length) return `<div class="page-head"><h1>Audiobooks</h1></div><div class="empty-state book-empty">${icon('book')}<h2>Your own audiobooks</h2><p>${BOOK_HOW}</p><button class="btn primary" data-action="add-book">${icon('plus')}Add a book</button></div>`;
   const going = all.filter(x => x[2]?.started && !x[2].finished).sort((a, b) => b[2].at - a[2].at);
-  const hero = going[0];
-  const add = `<button class="btn" data-action="add-book">${icon('plus')}Add a book</button>`;
-  if (!all.length) return `<div class="page-head"><h1>Audiobooks</h1></div>${bookQueueHtml()}<div class="empty-state book-empty">${icon('book')}<h2>Your own audiobooks</h2><p>${BOOK_HOW}</p>${add}</div>`;
-  let heroHtml = '';
-  if (hero) {
-    const [k, ch, sp] = hero, st = bookStats(k), t = ch[sp.i];
-    heroHtml = `<section class="book-hero" style="${ambient(t.colors || colorsOf(ch))}">${bookCover(t, 'big')}
-      <div class="bh-meta"><div class="eyebrow">Continue listening</div><h2>${esc(t.album)}</h2><div class="muted">${esc(t.artist)}</div>
-      <div class="bh-now">${esc(t.title)}</div><div class="bh-bar"><span class="pod-bar"><i style="width:${st.pct}%"></i></span><span>${esc(leftTxt(st.left))} left</span></div>
-      <div class="row-actions"><button class="btn primary" data-action="book-play" data-book="${esc(k)}">${icon(current()?.id === t.id && !engine.el.paused ? 'pause' : 'play')}${current()?.id === t.id && !engine.el.paused ? 'Pause' : 'Resume'}</button><button class="btn" data-action="book-read" data-book="${esc(k)}">${icon('read')}Read</button></div></div></section>`;
+  const pick = going[0] || all.find(x => !narratingFor(x[1][0].album)) || all[0];
+  let hero = '';
+  if (pick) {
+    const [k, ch, sp] = pick, st = bookStats(k), t = ch[sp.i] || ch[0], playing = ch.some(c => c.id === current()?.id) && !engine.el.paused;
+    hero = `<div class="bk-hero-row"><a href="#/book/${encodeURIComponent(k)}">${bookCover(t, 'big')}</a><div class="bk-hero-meta">
+        <div class="bk-eb">${sp.started && !sp.finished ? 'Continue' : 'Start listening'}</div><a class="bk-ht" href="#/book/${encodeURIComponent(k)}">${esc(t.album || t.title)}</a><div class="bk-ha">${esc(t.artist)}</div>
+        <div class="bk-hc ellipsis">${esc(t.title)}</div><div class="bk-hp"><span class="pod-bar"><i style="width:${st.pct}%"></i></span>${esc(leftTxt(sp.started ? st.left : st.total))}${sp.started ? ' left' : ''}</div></div></div>
+      <div class="bk-acts"><button class="bk-btn light" data-action="book-play" data-book="${esc(k)}">${icon(playing ? 'pause' : 'play')}${playing ? 'Pause' : 'Listen'}</button><button class="bk-btn glass" data-action="book-read" data-book="${esc(k)}">${icon('read')}Read</button></div>`;
   }
-  return `<div class="page-head"><h1>Audiobooks</h1>${add}</div>${heroHtml}${bookQueueHtml()}
-    <section class="section"><div class="section-head"><h2>Your Books</h2></div><div class="book-grid">${all.map(([k, ch]) => bookCard([k, ch])).join('')}</div></section>
+  const f = S.bookFilter || 'all';
+  const list = all.filter(([, ch, sp]) => f === 'all' || (f === 'listening' && sp?.started && !sp.finished) || (f === 'finished' && sp?.finished) || (f === 'narrating' && narratingFor(ch[0].album)));
+  const tiles = [...(f === 'all' || f === 'narrating' ? pending.map(queueTile) : []), ...list.map(([k, ch]) => bookTile([k, ch]))];
+  const chips = [['all', 'All'], ['listening', 'Listening'], ['narrating', 'Narrating'], ['finished', 'Finished']].map(([k, l]) => `<button class="chip ${f === k ? 'on' : ''}" data-action="book-filter" data-f="${k}">${l}</button>`).join('');
+  const lead = pick ? pick[1][pick[2].i] || pick[1][0] : null;
+  return `<section class="bk-hero">${lead ? `<div class="bk-hero-bg"><img src="${artOf(lead, 'full')}" alt=""></div>` : ''}<div class="bk-hero-in">
+      <div class="bk-top"><h1>Audiobooks</h1>${add}</div>${hero}</div></section>
+    <div class="chips bk-chips">${chips}</div>
+    ${tiles.length ? `<div class="bk-grid">${tiles.join('')}</div>` : `<p class="muted bk-none">No books here yet.</p>`}
     <p class="muted book-how">${BOOK_HOW}</p>`;
 };
 VIEWS.book = () => {
   const key = S.param, ch = bookChapters(key);
   if (!ch.length) return `${back()}<div class="empty-state small"><p>This book isn’t in your library.</p></div>`;
-  const t0 = ch[0], st = bookStats(key), sp = bookSpot(key), playingHere = ch.some(c => c.id === current()?.id) && !engine.el.paused;
-  const label = playingHere ? 'Pause' : sp.finished ? 'Listen again' : sp.started ? `Resume · ${ch[sp.i].title}` : 'Start listening';
-  return `${back()}<div class="book-head" style="${ambient(t0.colors || colorsOf(ch))}">${bookCover(t0, 'big')}
-    <div class="bkh-meta"><div class="eyebrow">Audiobook</div><h1>${esc(t0.album || t0.title)}</h1><div class="muted">${esc(t0.artist)}</div>
-    <div class="bkh-facts">${ch.length} chapter${ch.length === 1 ? '' : 's'} · ${esc(leftTxt(st.total))}${sp.started && !sp.finished ? ` · ${esc(leftTxt(st.left))} left` : ''}</div>
-    ${sp.started && !sp.finished ? `<div class="bh-bar"><span class="pod-bar"><i style="width:${st.pct}%"></i></span></div>` : ''}
-    <div class="row-actions"><button class="btn primary" data-action="book-play" data-book="${esc(key)}">${icon(playingHere ? 'pause' : 'play')}<span class="ellipsis">${esc(label)}</span></button><button class="btn" data-action="book-read" data-book="${esc(key)}">${icon('read')}Read</button>${sp.started ? `<button class="btn ghost" data-action="book-restart" data-book="${esc(key)}">Start over</button>` : ''}</div></div></div>
-    <section class="section"><div class="section-head"><h2>Chapters</h2></div><div class="book-chapters">${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div></section>`;
+  const t0 = ch[0], st = bookStats(key), sp = bookSpot(key), playingHere = ch.some(c => c.id === current()?.id) && !engine.el.paused, q = narratingFor(t0.album);
+  const label = playingHere ? 'Pause' : sp.finished ? 'Listen again' : sp.started ? 'Resume' : 'Start listening';
+  return `<section class="bk-detail"><div class="bk-hero-bg"><img src="${artOf(t0, 'full')}" alt=""></div><div class="bk-detail-in">${back()}
+      ${bookCover(t0, 'big')}<h1>${esc(t0.album || t0.title)}</h1><div class="bk-ha">${esc(t0.artist)}</div>
+      <div class="bk-facts">${ch.length} chapter${ch.length === 1 ? '' : 's'} · ${esc(leftTxt(st.total))}${sp.started && !sp.finished ? ` · ${esc(leftTxt(st.left))} left` : ''}${q ? ' · still narrating' : ''}</div>
+      ${sp.started && !sp.finished ? `<div class="bk-dp"><span class="pod-bar"><i style="width:${st.pct}%"></i></span></div><div class="bk-at ellipsis">${esc(ch[sp.i].title)}</div>` : ''}
+      <div class="bk-acts"><button class="bk-btn light" data-action="book-play" data-book="${esc(key)}">${icon(playingHere ? 'pause' : 'play')}${label}</button><button class="bk-btn glass" data-action="book-read" data-book="${esc(key)}">${icon('read')}Read</button></div>
+      ${sp.started ? `<button class="link bk-restart" data-action="book-restart" data-book="${esc(key)}">Start over</button>` : ''}</div></section>
+    <section class="section bk-chs"><div class="section-head"><h2>Chapters</h2></div><div class="book-chapters">${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div></section>`;
 };
 VIEWS.podcasts = () => {
   S.pod.subs.forEach(s => showEps(s.id));
