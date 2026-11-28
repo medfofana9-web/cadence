@@ -38,11 +38,24 @@ def phrases(p):  # split at sentence ends and at commas/colons/semicolons, keepi
 def trim(a, sr):  # cut the model's own silence at both ends so our pauses are the real pauses
     idx = np.where(np.abs(a) > 0.012)[0]
     return a[max(0, idx[0] - int(sr * .03)):idx[-1] + int(sr * .06)] if len(idx) else a
+# Fluency pass: whole paragraphs in one go (the model carries the flow across sentences), livelier delivery,
+# faster delivery setting. Version 8 keeps our deep voices; version 9 uses the model's own natural-sounding
+# built-in voice (more human rhythm), lowered to his measured pitch.
+def para_audio(p, ex, cfg):
+    chunks, cur = [], ''
+    for sent in re.split(r'(?<=[.!?])\s+', p):            # paragraphs up to ~280 characters per pass
+        if cur and len(cur) + len(sent) > 280: chunks.append(cur); cur = sent
+        else: cur = (cur + ' ' + sent).strip()
+    if cur: chunks.append(cur)
+    out = []
+    for c in chunks: out += [trim(m.generate(c, exaggeration=ex, cfg_weight=cfg, temperature=.8).squeeze(0).numpy(), m.sr), np.zeros(int(m.sr * .35), np.float32)]
+    return out
 for tag in ['American', 'British']:
-    m.prepare_conditionals(refs[tag], exaggeration=.75)
-    w = [np.zeros(int(m.sr * .4), np.float32)]
-    for p in paras:
-        for sent in re.split(r'(?<=[.!?])\s+', p):   # whole sentences keep the rise and fall
-            w += [trim(m.generate(sent, exaggeration=.75, cfg_weight=.3, temperature=.8).squeeze(0).numpy(), m.sr), np.zeros(int(m.sr * .5), np.float32)]
-        w.append(np.zeros(int(m.sr * .6), np.float32))
-    mp3(f'{tag} 7 - Matched, brisker', np.concatenate(w), m.sr, 'atempo=1.13,' + NATURAL)
+    m.prepare_conditionals(refs[tag], exaggeration=.8)
+    w = [np.zeros(int(m.sr * .3), np.float32)]
+    for p in paras: w += para_audio(p, .8, .5) + [np.zeros(int(m.sr * .55), np.float32)]
+    mp3(f'{tag} 8 - Fluent, our voice', np.concatenate(w), m.sr, 'atempo=1.04,' + NATURAL)
+m = ChatterboxTTS.from_pretrained(device='cpu')            # fresh model = its built-in voice
+w = [np.zeros(int(m.sr * .3), np.float32)]
+for p in paras: w += para_audio(p, .75, .5) + [np.zeros(int(m.sr * .55), np.float32)]
+mp3('American 9 - Fluent, natural voice', np.concatenate(w), m.sr, f'asetrate={m.sr}*0.8,aresample={m.sr},atempo=1.25,atempo=1.0,' + NATURAL)
