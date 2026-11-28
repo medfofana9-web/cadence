@@ -3435,6 +3435,8 @@ async function epubChapters(buf) {
   const out = [], bookTitle = (opf.getElementsByTagName('dc:title')[0]?.textContent || '').trim().toLowerCase();
   for (let { head, paras } of groups) {
     const bt2 = bookTitle.replace(/^the /, ''); paras = paras.filter(p => { const l = p.toLowerCase(); return l !== bookTitle && l !== bt2 && l !== head.toLowerCase(); });
+    // some books put each printed line in its own paragraph; put sentences back together
+    paras = paras.reduce((o, p) => { const pr = o[o.length - 1]; if (pr && !(p === p.toUpperCase() || pr === pr.toUpperCase()) && !/[.!?:;"”’)\]]$/.test(pr) && (/^[a-z]/.test(p) || pr.split(' ').length <= 12)) o[o.length - 1] = pr + ' ' + p; else o.push(p); return o; }, []);
     while (paras[0] && paras[0].split(' ').length <= 8 && head.toLowerCase().includes(paras[0].toLowerCase().replace(/[.:]$/, ''))) paras.shift();
     if (paras.join(' ').split(' ').length < 60 || skip.test(head)) continue;
     if (/^(law|chapter|part|rule) \d+$/i.test(head) && paras[0] && paras[0].split(' ').length <= 14 && !/[.!?]$/.test(paras[0])) { let name = paras.shift(); while (paras[0] && paras[0].split(' ').length <= 8 && !/[.!?]$/.test(paras[0]) && name.split(' ').length < 18 && !/^(judgment|transgression|observance|interpretation|keys to power|reversal|image|authority)/i.test(paras[0])) name += ' ' + paras.shift(); head = `${head}: ${name}`; }
@@ -3468,21 +3470,27 @@ async function ttsFrom(i) {
     catch (e) { console.warn('voice', e); if (my === TTS.n) { toast('Couldn’t load the narrator voice. Check your connection and try again.'); ttsStop(); } return; }
     if (my !== TTS.n) return; rdControls();
   }
-  const cache = new Map(), gen = k => { if (!cache.has(k) && k < s.length) cache.set(k, narrator.speak(sayText(s[k][1]), voice).catch(() => null)); return cache.get(k); };
-  const play = async k => {
+  // groups of whole sentences (one paragraph at most, ~320 characters) give the voice context, so it reads fluently
+  const groups = []; for (let k = 0; k < s.length;) { const g = [k]; let len = s[k][1].length; while (!s[k][2] && k + 1 < s.length && len + s[k + 1][1].length < 320) { k++; g.push(k); len += s[k][1].length; } groups.push(g); k++; }
+  let gi = groups.findIndex(g => g.includes(i)); if (gi < 0) gi = 0;
+  const cache = new Map(), gen = n => { if (!cache.has(n) && n < groups.length) cache.set(n, narrator.speak(sayText(groups[n].map(k => s[k][1]).join(' ')), voice).catch(() => null)); return cache.get(n); };
+  const play = async n => {
     if (my !== TTS.n || !TTS.on) return;
-    if (k >= s.length) { const ch = rdList(t), n = ch.findIndex(c => c.id === t.id); if (ch[n + 1]) { RD.id = ch[n + 1].id; paintReader(); setTimeout(() => ttsFrom(0), 300); } else ttsStop(); return; }
-    rdFollow(0, false, k);
-    const a = await gen(k); for (let q = 1; q <= 4; q++) gen(k + q);
+    if (n >= groups.length) { const ch = rdList(t), x = ch.findIndex(c => c.id === t.id); if (ch[x + 1]) { RD.id = ch[x + 1].id; paintReader(); setTimeout(() => ttsFrom(0), 300); } else ttsStop(); return; }
+    const g = groups[n]; rdFollow(0, false, g[0]);
+    const a = await gen(n); for (let q = 1; q <= 3; q++) gen(n + q);
     if (my !== TTS.n || !TTS.on) return;
-    if (!a) return play(k + 1);
-    const buf = AC.createBuffer(1, a.samples.length, a.rate); buf.copyToChannel(a.samples, 0);
-    const src = AC.createBufferSource(); src.buffer = buf; src.playbackRate.value = S.settings.bookSpeed || 1; src.connect(AC.destination);
+    if (!a) return play(n + 1);
+    const rate = S.settings.bookSpeed || 1, buf = AC.createBuffer(1, a.samples.length, a.rate); buf.copyToChannel(a.samples, 0);
+    const src = AC.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate; src.connect(AC.destination);
     TTS.src = src;
-    src.onended = () => { if (TTS.src === src) setTimeout(() => play(k + 1), (s[k][2] ? 420 : 90) / (S.settings.bookSpeed || 1)); };
+    // move the highlight through the group by each sentence's share of the text
+    const total = g.reduce((x, k) => x + s[k][1].length, 0), dur = buf.duration / rate; let acc = 0;
+    g.slice(1).forEach((k, m) => { acc += s[g[m]][1].length; setTimeout(() => { if (TTS.src === src) rdFollow(0, false, k); }, acc / total * dur * 1000); });
+    src.onended = () => { if (TTS.src === src) setTimeout(() => play(n + 1), (s[g[g.length - 1]][2] ? 380 : 120) / rate); };
     src.start();
   };
-  play(i);
+  play(gi);
 }
 function ttsHalt() { try { TTS.src?.stop(); } catch {} TTS.src = null; try { speechSynthesis.cancel(); } catch {} }
 if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => {};

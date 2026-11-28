@@ -75,6 +75,19 @@ def html_text(raw):
     return paras
 
 
+def join_broken(paras):
+    """Some ebooks put each printed line in its own paragraph: "do not go" / "too far in displaying...". Put sentences back together."""
+    out = []
+    for p in paras:
+        if out and p != '\u2042' and out[-1] != '\u2042':
+            prev = out[-1]
+            heading = p.isupper() or prev.isupper()
+            if not heading and not re.search(r'[.!?:;"”’)\]]$', prev) and (p[:1].islower() or len(prev.split()) <= 12 and not prev.istitle()):
+                out[-1] = prev + ' ' + p; continue
+        out.append(p)
+    return out
+
+
 def split_long(title, paras):
     words = sum(len(p.split()) for p in paras)
     if words <= MAX_WORDS * 1.3: return [{'title': title, 'text': '\n'.join(p for p in paras if p != '⁂')}]
@@ -144,6 +157,7 @@ def epub(path, outdir):
         if chapters and BACK.match(g['title']): break
         if SKIP.match(g['title']) or sum(len(p.split()) for p in g['paras']) < 60: continue
         paras = [p for p in g['paras'] if p.lower() not in (title.lower(), re.sub(r'^the ', '', title.lower()))]  # running headers
+        paras = join_broken(paras)
         if paras and clean(paras[0]).lower() == g['title'].lower(): paras = paras[1:]
         paras = [p for p in paras if not re.match(r'^(translated (from|by)|copyright|all rights reserved)', p, re.I)]
         # drop a heading repeated at the top of the text ("CHAPTER 1", "Don't Try")
