@@ -211,6 +211,7 @@ async function adoptPlayer(r) {
   if (r?.dev !== DEV.id && (r?.at || 0) > (S.remotePlayer?.at || 0)) S.remotePlayer = r;
   if (!r?.queue?.length || r.dev === DEV.id || (r.at || 0) <= (P.activeAt || 0) + 1000 || !engine.el.paused) return;
   const curId = r.queue[r.idx]; if (!T(curId)) return;
+  if (current()?.id === curId && Math.abs(spotNow() - (r.time || 0)) < 4) { P.activeAt = r.at; savePlayer(true); return; } // already here
   const queue = r.queue.filter(id => T(id)), idx = queue.indexOf(curId);
   Object.assign(P, { queue, idx, shuffle: !!r.shuffle, repeat: r.repeat || 'off', context: r.context || '', contextRoute: r.contextRoute || '', mode: r.mode || null, seed: r.seed || null, autoAdded: new Set(), activeAt: r.at, resumeId: curId, resumeAt: r.time || 0 });
   const ok = await loadTrack(curId, { autoplay: false, quiet: true });
@@ -2091,10 +2092,11 @@ for (const el of engine.all) {
   const mine = fn => e => { if (e.target === engine.el) fn(e); };
   el.addEventListener('timeupdate', mine(onTime));
   el.addEventListener('loadedmetadata', mine(() => { const t = current(); if (t && isFinite(el.duration) && (!t.duration || Math.abs(t.duration - el.duration) > 2)) { t.duration = el.duration; saveTrack(t, { sync: false }); } onTime(); }));
-  el.addEventListener('play', mine(() => { P.tick = 0; P.activeAt = Date.now(); updatePlayIcons(); }));
+  el.addEventListener('play', mine(() => { P.tick = 0; updatePlayIcons(); }));
+  el.addEventListener('playing', mine(() => { P.isPlaying = true; P.activeAt = Date.now(); }));
   // iPhone ignores a jump made before a song starts loading; make it once playback begins
   el.addEventListener('playing', mine(() => { if (P.resumeAt && current()?.id === P.resumeId) { const at = P.resumeAt; P.resumeAt = 0; P.resumeId = null; if (Math.abs(el.currentTime - at) > 2 && (!el.duration || at < el.duration - 1)) el.currentTime = at; } }));
-  el.addEventListener('pause', mine(() => { P.tick = 0; P.activeAt = Date.now(); updatePlayIcons(); savePlayer(); queueStatePush(); }));
+  el.addEventListener('pause', mine(() => { P.tick = 0; if (P.isPlaying) { P.isPlaying = false; P.activeAt = Date.now(); queueStatePush(); } updatePlayIcons(); savePlayer(); }));
   el.addEventListener('waiting', mine(() => $('#player').classList.add('buffering')));
   el.addEventListener('playing', mine(() => $('#player').classList.remove('buffering')));
   el.addEventListener('ended', mine(() => {
