@@ -298,7 +298,7 @@ async function boot() {
   S.quranSpot = await kv.get('quranSpot', null);
   S.quranSaved = await kv.get('quranSaved', []);
   CHECK.lists = await kv.get('playlistChecks', []);
-  S.bookQueue = await kv.get('bookQueue', []); S.bookmarks = await kv.get('bookmarks', []); S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
+  S.skipLog = await kv.get('skipLog', {}); S.bookQueue = await kv.get('bookQueue', []); S.bookmarks = await kv.get('bookmarks', []); S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
   S.cleanNoArt = await kv.get('cleanNoArt', []); S.qOff = await kv.get('qOff', {}); S.offPaths = await kv.get('offPaths', {}); S.deskPaths = window.fofDesktop ? await kv.get('deskPaths', {}) : {};
   for (const [id, p] of pls) S.playlists.set(id, p);
   for (const [id, b] of arts) { if (id.startsWith('pl:')) S.plCovers.set(id.slice(3), URL.createObjectURL(b)); else S.art.set(id, b); }
@@ -795,6 +795,10 @@ const MOOD_KEYS = ['chill', 'focus', 'energy', 'party', 'workout', 'latenight', 
 const GENRES = ['Hip-Hop', 'R&B', 'Afrobeats', 'Amapiano', 'Soukous', 'Coupé-Décalé', 'Highlife', 'Dancehall', 'Reggae', 'Pop', 'Drill', 'Gospel', 'Jazz', 'Rock', 'Latin', 'Country'];
 
 /** Songs from your library that fit a seed: same artist, same kind of music, songs you like; avoids repeats. */
+/** Region / scene a song belongs to, from its genre, so Afrobeats seeds lead to African music, not unrelated rap. */
+const SCENES = [['africa', /afro|highlife|azonto|amapiano|naija|ghana|hiplife|coup[eé]|ndombolo|bongo|gqom|kizomba|kuduro|makossa|rumba|soukous|mbalax|zouk|afrikan|african/i], ['latin', /reggaet|latin|salsa|bachata|cumbia|dembow/i], ['caribbean', /dancehall|reggae|soca|calypso/i], ['islamic', /nasheed/i]];
+const scene = t => { const g = `${t.genre || ''}`; for (const [k, re] of SCENES) if (re.test(g)) return k; return 'west'; };
+const skipPenalty = t => Math.min(((S.skipLog || {})[t.id] || []).filter(x => Date.now() - x < 30 * DAY).length, 4) * 1.1;
 function similar(seeds, n = 15, exclude = new Set()) {
   seeds = (Array.isArray(seeds) ? seeds : [seeds]).filter(Boolean);
   if (!seeds.length) return [];
@@ -802,6 +806,7 @@ function similar(seeds, n = 15, exclude = new Set()) {
   const seedArtists = new Set(seeds.map(t => mainArtist(t.artist)));
   const seedGenres = new Set(seeds.map(t => t.genre).filter(Boolean));
   const seedCats = new Set(seeds.map(t => t.category));
+  const seedScenes = new Set(seeds.map(scene));
   const related = relatedArtists([...seedArtists]);
   const seedIds = new Set(seeds.map(t => t.id));
   const scored = musicOnly().filter(t => !seedIds.has(t.id)).map(t => {
@@ -811,6 +816,8 @@ function similar(seeds, n = 15, exclude = new Set()) {
     if (seedArtists.has(a)) s += 2.2;
     else if (related.has(a)) s += 1.6;
     if (t.genre && seedGenres.has(t.genre)) s += 2;
+    s += seedScenes.has(scene(t)) ? 1.8 : (seedScenes.has('west') ? -.6 : -2.5); // stay in the same scene
+    s -= skipPenalty(t);
     if (t.liked) s += 1.2;
     s += Math.min(t.plays || 0, 12) * .08;
     if (recent.has(t.id)) s -= 4;
@@ -842,7 +849,7 @@ function relatedArtists(names) {
 function flowPicks(n = 15) {
   const counts = playCounts(e => Date.now() - e.at < 90 * DAY);
   const recent = new Set([...P.played.slice(-60), ...P.queue.slice(Math.max(0, P.idx - 30), P.idx + 1)]);
-  const pool = musicOnly().filter(t => !recent.has(t.id)).map(t => [Math.random() * (1 + (t.liked ? 3 : 0) + Math.min(counts.get(t.id) || 0, 8) * .5 + (t.plays ? .5 : 1)), t]);
+  const pool = musicOnly().filter(t => !recent.has(t.id)).map(t => [Math.random() * (1 + (t.liked ? 3 : 0) + Math.min(counts.get(t.id) || 0, 8) * .5 + (t.plays ? .5 : 1)) - skipPenalty(t) * .6, t]);
   pool.sort((a, b) => b[0] - a[0]);
   // smart order: each song leads into one with a similar feel (genre, loudness, era) so the mix flows
   const cand = pool.slice(0, n * 3).map(x => x[1]);
@@ -852,6 +859,7 @@ function flowPicks(n = 15) {
     if (a.genre && b.genre) v += a.genre === b.genre ? 2.2 : -.8;
     if ((a.category || 'Music') !== (b.category || 'Music')) v -= 4;
     if (mainArtist(a.artist) === mainArtist(b.artist)) v -= 6;
+    if (scene(a) !== scene(b)) v -= 1.5; // don't jump from Highlife straight into drill
     if (isFinite(a.gain) && isFinite(b.gain)) v -= Math.min(Math.abs(a.gain - b.gain), 9) / 3;
     if (a.year && b.year) v -= Math.min(Math.abs(a.year - b.year), 30) / 12;
     return v;
@@ -4965,6 +4973,8 @@ async function growUndo(pid, ids) {
 /** Skipping a song early three times while playing a playlist takes it out of that playlist. */
 function noteSkip() {
   const t = current(); if (!isSong(t)) return;
+  // every early skip is remembered for a month and gently lowers that song in Flow and radio (one skip never bans it)
+  if (engine.el.currentTime > 1 && engine.el.currentTime < 30) { const l = (S.skipLog[t.id] || []).filter(x => Date.now() - x < 30 * DAY); l.push(Date.now()); S.skipLog[t.id] = l.slice(-6); kv.set('skipLog', S.skipLog); }
   const r = P.contextRoute || ''; if (!r.startsWith('playlist/')) return;
   const p = S.playlists.get(r.slice(9)); if (!p || p.auto === false || !p.tracks.includes(t.id)) return;
   if (engine.el.currentTime > 30 || engine.el.currentTime < 1) return;
