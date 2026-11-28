@@ -17,12 +17,12 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq espeak-ng ffmpeg
       - run: |
           pip install -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install -q chatterbox-tts kokoro soundfile
+          pip install -q kokoro soundfile
       - run: python tools/audiobook/samples.py samples
       - uses: actions/upload-artifact@v4
         with: { name: voice-samples, path: samples }
       - name: Save samples to the voice-samples branch
         run: |
           git config user.name fof-bot; git config user.email bot@users.noreply.github.com
-          git checkout --orphan voice-samples-out; git rm -rfq .; cp samples/*.mp3 .; git add *.mp3
+          git checkout --orphan voice-samples-out; git rm -rfq .; cp samples/*.mp3 .; git add -A
           git commit -qm "Voice samples"; git push -f origin voice-samples-out
