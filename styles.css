@@ -1400,3 +1400,4 @@ body:not(.is-paused) .dr-play .when-paused{display:none}
 /* ---------- Mac app window ---------- */
 .desktop-app body::before{content:'';position:fixed;top:0;left:0;right:0;height:26px;-webkit-app-region:drag;z-index:999}
 .desktop-app .sidebar{padding-top:30px}
+.vl-chunk{position:absolute;left:0;right:0;top:0;contain:layout paint}

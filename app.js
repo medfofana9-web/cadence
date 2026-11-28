@@ -16,8 +16,12 @@ const IN_APP = !!window.Capacitor?.isNativePlatform?.() || /FofMusicApp/.test(na
 /* =====================================================================
    State
    ===================================================================== */
+/** Artwork kept as files until a screen shows it, so opening the app doesn't prepare 2,000 images up front. */
+class LazyUrls extends Map {
+  get(k) { const v = super.get(k); if (v instanceof Blob) { const u = URL.createObjectURL(v); super.set(k, u); return u; } return v; }
+}
 const S = {
-  tracks: new Map(), ext: new Map(), playlists: new Map(), art: new Map(), thumbs: new Map(), plCovers: new Map(),
+  tracks: new Map(), ext: new Map(), playlists: new Map(), art: new LazyUrls(), thumbs: new LazyUrls(), plCovers: new Map(),
   history: [], log: [], ctxs: [], searches: [], dupIgnore: [], channels: [], fixes: { artists: {}, names: {} }, folder: null, folderState: '',
   lists: {}, vlists: {}, route: 'home', param: '', settings: {}, version: null, user: null,
   scroll: {}, freshNav: false, index: new Index(), indexDirty: true, lastSync: 0, ver: 0,
@@ -64,7 +68,8 @@ const albumArtist = t => t.albumArtist && !/various/i.test(t.albumArtist) ? t.al
 const shuffleArr = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const count = n => `${n} song${n === 1 ? '' : 's'}`;
 const total = ts => { const s = ts.reduce((a, t) => a + (t.duration || 0), 0); const m = Math.round(s / 60); return m >= 60 ? `${Math.floor(m / 60)} hr ${m % 60} min` : `${m} min`; };
-const ago = ms => { if (!ms) return '—'; const d = (Date.now() - ms) / DAY; if (d < 1) return 'Today'; if (d < 2) return 'Yesterday'; if (d < 7) return `${Math.floor(d)} days ago`; return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d > 300 ? 'numeric' : undefined }); };
+const DF = { y: new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }), n: new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }) };
+const ago = ms => { if (!ms) return '—'; const d = (Date.now() - ms) / DAY; if (d < 1) return 'Today'; if (d < 2) return 'Yesterday'; if (d < 7) return `${Math.floor(d)} days ago`; return (d > 300 ? DF.y : DF.n).format(ms); };
 const hours = s => { const h = s / 3600; return h >= 1 ? `${h.toFixed(h >= 10 ? 0 : 1)} hr` : `${Math.round(s / 60)} min`; };
 const bytes = n => n > 1e9 ? (n / 1e9).toFixed(1) + ' GB' : (n / 1e6).toFixed(0) + ' MB';
 
@@ -213,8 +218,8 @@ async function boot() {
   S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
   S.cleanNoArt = await kv.get('cleanNoArt', []); S.qOff = await kv.get('qOff', {}); S.offPaths = await kv.get('offPaths', {}); S.deskPaths = window.fofDesktop ? await kv.get('deskPaths', {}) : {};
   for (const [id, p] of pls) S.playlists.set(id, p);
-  for (const [id, b] of arts) (id.startsWith('pl:') ? S.plCovers : S.art).set(id.replace(/^pl:/, ''), URL.createObjectURL(b));
-  for (const [id, b] of thumbs) S.thumbs.set(id, URL.createObjectURL(b));
+  for (const [id, b] of arts) { if (id.startsWith('pl:')) S.plCovers.set(id.slice(3), URL.createObjectURL(b)); else S.art.set(id, b); }
+  for (const [id, b] of thumbs) S.thumbs.set(id, b);
   [S.history, S.log, S.ctxs, S.searches, S.dupIgnore, S.settingsAt, S.channels, S.folder, S.fixes] = await Promise.all([kv.get('history', []), kv.get('log', []), kv.get('ctxs', []), kv.get('searches', []), kv.get('dupIgnore', []), kv.get('settingsAt', 0), kv.get('channels', []), kv.get('folder', null), kv.get('fixes', { artists: {}, names: {} })]);
   engine.setVolume(S.settings.volume ?? 1);
   $('#p-vol').value = Math.round((S.settings.volume ?? 1) * 100); paintRange($('#p-vol'));
@@ -235,6 +240,7 @@ async function boot() {
   window.addEventListener('hashchange', route);
   route();
   S.bootDone = true;
+  warmThumbs();
   updateModes();
   backfillArt();
   repairMatches().then(recleanNames).then(restoreTags).then(() => scanFolder()).then(identifyLibrary).then(() => fillGenres());
@@ -421,7 +427,6 @@ function updateWhenQuiet() {
 }
 for (const el of engine.els) el.addEventListener('pause', () => { if (document.hidden || IN_APP) updateWhenQuiet(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) updateWhenQuiet(); });
-setInterval(checkVersion, 10 * 60 * 1000);
 async function applyUpdate() {
   flushListen(); await savePlayer(true);
   if ('caches' in window) for (const k of await caches.keys()) await caches.delete(k);
@@ -433,7 +438,7 @@ async function applyUpdate() {
    Routing (keeps scroll position when you go back)
    ===================================================================== */
 function go(r) { S.freshNav = true; location.hash = '#/' + r; }
-$('#main').addEventListener('scroll', () => { S.scroll[location.hash] = $('#main').scrollTop; mountVisible(); }, { passive: true });
+$('#main').addEventListener('scroll', () => { S.scroll[location.hash] = $('#main').scrollTop; mountSoon(); }, { passive: true });
 function route(ev) {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, '')) || 'home';
   if (h === 'drive' && ev?.oldURL && !ev.oldURL.includes('#/drive')) S.driveFrom = decodeURIComponent(ev.oldURL.split('#/')[1] || 'home');
@@ -467,13 +472,13 @@ function render() {
   if (!nav && Date.now() - lastScroll < 900) { clearTimeout(renderT); renderT = setTimeout(render, 1000); return; }
   clearTimeout(renderT);
   const keepLists = S.lists, keepV = S.vlists;
-  S.lists = {}; S.vlists = {};
+  S.lists = {}; S.vlists = {}; listN = 0;
   if (S.indexDirty) rebuildIndex();
   const v = VIEWS[S.route] || VIEWS.home;
   const view = $('#view');
   const y = $('#main').scrollTop;
   const html = v();
-  if (!nav && html === lastHTML) { S.lists = keepLists; S.vlists = keepV; markPlaying(); paintTime(); return; }
+  if (!nav && html === lastHTML) { gridRest = null; S.lists = keepLists; S.vlists = keepV; markPlaying(); paintTime(); return; }
   lastHTML = html; lastPage = page;
   view.innerHTML = html;
   if (!S.freshNav) $('#main').scrollTop = y;
@@ -488,6 +493,7 @@ function afterRender() {
   if (S.route === 'quran' || S.route === 'reciters') bindQuran();
   paintTime();
   requestAnimationFrame(() => $$('.shelf').forEach(sh => sh.closest('.section')?.classList.toggle('fits', sh.scrollWidth <= sh.clientWidth + 4)));
+  fillBigGrid();
   renderBadge();
   $$('[data-sortable]').forEach(el => makeSortable(el, el.dataset.sortable));
   mountVisible();
@@ -499,7 +505,8 @@ function afterRender() {
    ===================================================================== */
 const COLW = { album: 'minmax(0,1fr)', added: '110px', plays: '64px', last: '110px' };
 const COLNAME = { album: 'Album', added: 'Added', plays: 'Plays', last: 'Last played' };
-function listKey(ids, context) { const k = 'l' + Object.keys(S.lists).length; S.lists[k] = ids; ids.context = context; return k; }
+let listN = 0;
+function listKey(ids, context) { const k = 'l' + (listN++); S.lists[k] = ids; ids.context = context; return k; }
 function gridFor(opts) { return `${opts.sortable ? '28px ' : ''}32px 44px minmax(0,1.4fr) ${opts.cols.map(c => COLW[c]).join(' ')} 36px 56px 36px`; }
 function rowHtml(t, i, key, opts) {
   return `<div class="track${opts.sortable ? " has-handle" : ""}" data-id="${t.id}" data-list="${key}" data-i="${i}" style="grid-template-columns:${gridFor(opts)}">
@@ -533,32 +540,61 @@ function hcell(k, label, opts, right) {
   return `<button class="hsort ${on ? 'on' : ''} ${right ? 'r' : ''}" data-action="sort-col" data-sort="${k}" data-scope="${opts.sortScope || 'songs'}">${label}${on ? `<svg class="${opts.sortDir > 0 ? 'up' : ''}"><use href="#i-down"/></svg>` : ''}</button>`;
 }
 let rowH = 0;
+const VCH = 10; // rows per block: blocks are added and removed as you scroll, rows already on screen are never redrawn
 function mountVisible() {
   const main = $('#main'); if (!Object.keys(S.vlists).length) return;
-  rowH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-h')) || 56;
-  const mr = main.getBoundingClientRect();
+  if (!rowH) rowH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-h')) || 56;
+  const mh = main.clientHeight, mtop = main.getBoundingClientRect().top;
+  let added = false;
   for (const el of $$('.vlist')) {
     const v = S.vlists[el.dataset.vl]; if (!v) continue;
-    const top = el.getBoundingClientRect().top - mr.top;
-    const start = Math.max(0, Math.floor(-top / rowH) - 10), end = Math.min(v.tracks.length, Math.ceil((mr.height - top) / rowH) + 10);
-    if (el._r === `${start}-${end}`) continue;
-    el._r = `${start}-${end}`;
+    const top = el.getBoundingClientRect().top - mtop;
+    const first = Math.max(0, Math.floor((-top - mh * .75) / rowH)), last = Math.min(v.tracks.length, Math.ceil((mh * 1.75 - top) / rowH));
+    const c0 = Math.floor(first / VCH), c1 = Math.max(c0, Math.ceil(last / VCH) - 1);
+    const key = c0 + '-' + c1; if (el._r === key) continue; el._r = key;
     const inner = el.firstElementChild;
-    inner.style.transform = `translateY(${start * rowH}px)`;
-    inner.innerHTML = v.tracks.slice(start, end).map((t, k) => rowHtml(t, start + k, el.dataset.vl, v.opts)).join('');
+    if (inner.style.transform) inner.style.transform = '';
+    const have = new Map([...inner.children].map(ch => [+ch.dataset.c, ch]));
+    for (const [c, ch] of have) if (c < c0 || c > c1) ch.remove();
+    for (let c = c0; c <= c1; c++) {
+      if (have.has(c) && have.get(c).isConnected) continue;
+      const s0 = c * VCH; if (s0 >= v.tracks.length) break;
+      const div = document.createElement('div'); div.className = 'vl-chunk'; div.dataset.c = c; div.style.transform = `translateY(${s0 * rowH}px)`;
+      div.innerHTML = v.tracks.slice(s0, s0 + VCH).map((t, k) => rowHtml(t, s0 + k, el.dataset.vl, v.opts)).join('');
+      inner.appendChild(div); added = true;
+    }
   }
-  markPlaying();
+  if (added) markPlaying();
 }
-window.addEventListener('resize', () => { $$('.vlist').forEach(el => { el._r = ''; }); mountVisible(); }, { passive: true });
+let vlRaf = 0;
+const mountSoon = () => { if (!vlRaf) vlRaf = requestAnimationFrame(() => { vlRaf = 0; mountVisible(); }); };
+window.addEventListener('resize', () => { rowH = 0; $$('.vlist').forEach(el => { el._r = ''; const i = el.firstElementChild; if (i) i.innerHTML = ''; }); mountVisible(); }, { passive: true });
 
 function trackCard(t, key, i) {
   return `<div class="card" data-play-list="${key}" data-i="${i}" title="${esc(t.title)} · ${esc(t.artist)}">
     <div class="cover"><img loading="lazy" decoding="async" src="${artOf(t)}" alt=""><span class="hover-play"><svg><use href="#i-play"/></svg></span></div>
     <div class="t ellipsis">${esc(t.title)}</div><div class="s ellipsis">${esc(t.artist)}</div></div>`;
 }
+/** The first few distinct covers in a list, without touching the rest of it. */
+/** Big grids show the first screens right away and add the rest a moment later, so the page opens instantly. */
+/** Gets cover thumbnails ready in spare moments after opening, so long lists scroll without a hitch. */
+function warmThumbs() {
+  const ids = [...S.thumbs.keys()]; let i = 0;
+  const idle = window.requestIdleCallback || (f => setTimeout(() => f({ timeRemaining: () => 8 }), 50));
+  const step = d => { while (i < ids.length && d.timeRemaining() > 2) { S.thumbs.get(ids[i++]); } if (i < ids.length) idle(step); };
+  setTimeout(() => idle(step), 1500);
+}
+let gridRest = null;
+function bigGrid(items, card) { if (items.length <= 48) return `<div class="grid">${items.map(card).join('')}</div>`; gridRest = { items: items.slice(48), card, lists: S.lists }; return `<div class="grid" id="big-grid">${items.slice(0, 48).map(card).join('')}</div>`; }
+function fillBigGrid() {
+  const rest = gridRest; gridRest = null; const el = $('#big-grid'); if (!rest || !el) return;
+  let i = 0; const step = () => { if (!el.isConnected || S.lists !== rest.lists) return; el.insertAdjacentHTML('beforeend', rest.items.slice(i, i + 24).map(rest.card).join('')); i += 24; if (i < rest.items.length) setTimeout(step, 16); else if (S.scroll[location.hash] && $('#main').scrollTop < S.scroll[location.hash]) $('#main').scrollTop = S.scroll[location.hash]; };
+  setTimeout(step, 0);
+}
+function firstArts(tracks, n) { const out = new Set(); for (const t of tracks) { const a = artOf(t); if (a !== PLACEHOLDER) out.add(a); if (out.size >= n) break; } return [...out]; }
 function collageHtml(tracks, custom) {
   if (custom) return `<img loading="lazy" src="${custom}" alt="">`;
-  const arts = [...new Set(tracks.map(t => artOf(t)).filter(a => a !== PLACEHOLDER))];
+  const arts = firstArts(tracks, 4);
   if (arts.length >= 4) return `<div class="collage">${arts.slice(0, 4).map(a => `<img loading="lazy" decoding="async" src="${a}" alt="">`).join('')}</div>`;
   return `<img loading="lazy" decoding="async" src="${arts[0] || PLACEHOLDER}" alt="">`;
 }
@@ -635,6 +671,9 @@ function mixTracks(name) {
   return [...new Set([...(groups('mix').get(key) || []), ...(groups('genre').get(key) || [])])];
 }
 function playCounts(filter) { const c = new Map(); for (const e of S.log) if (!filter || filter(e)) c.set(e.id, (c.get(e.id) || 0) + 1); return c; }
+/** Same counts, worked out once and reused until you play something new (the moments shelves ask for them often). */
+const countMemo = new Map();
+function memoCounts(key, filter) { const v = S.log.length + ':' + Math.floor(Date.now() / 36e5); const m = countMemo.get(key); if (m && m.v === v) return m.c; const c = playCounts(filter); countMemo.set(key, { v, c }); return c; }
 const isNight = e => { const h = new Date(e.at).getHours(); return h >= 22 || h < 4; };
 const SMART = {
   'most-played': { title: 'Most Played', desc: 'The songs you play the most', get: ts => ts.filter(t => t.plays > 0).sort((a, b) => b.plays - a.plays || (b.lastPlayed || 0) - (a.lastPlayed || 0)).slice(0, 50) },
@@ -643,7 +682,7 @@ const SMART = {
   'recently-loved': { title: 'Recently Loved', desc: 'Songs you liked in the last month', get: ts => ts.filter(t => t.liked && Date.now() - (t.likedAt || 0) < 30 * DAY).sort((a, b) => b.likedAt - a.likedAt) },
   'rediscover': { title: 'Rediscover', desc: 'Songs you loved but haven’t played in over a month', get: ts => ts.filter(t => (t.plays >= 2 || t.liked) && t.lastPlayed && Date.now() - t.lastPlayed > 30 * DAY).sort((a, b) => (b.plays || 0) - (a.plays || 0)) },
   'forgotten-favorites': { title: 'Forgotten Favorites', desc: 'Liked songs you haven’t played in 45 days', get: ts => ts.filter(t => t.liked && t.lastPlayed && Date.now() - t.lastPlayed > 45 * DAY) },
-  'late-night': { title: 'Late Night', desc: 'What you play between 10 pm and 4 am', get: ts => { const c = playCounts(isNight); return ts.filter(t => c.get(t.id)).sort((a, b) => c.get(b.id) - c.get(a.id)); } },
+  'late-night': { title: 'Late Night', desc: 'What you play between 10 pm and 4 am', get: ts => { const c = memoCounts('night', isNight); return ts.filter(t => c.get(t.id)).sort((a, b) => c.get(b.id) - c.get(a.id)); } },
   'never-played': { title: 'Never Played', desc: 'In your library but not played yet', get: ts => ts.filter(t => !t.plays).sort(byAdded) },
 };
 const smartList = k => SMART[k] ? SMART[k].get(visible()) : [];
@@ -651,7 +690,7 @@ const MOODS = {
   chill: { title: 'Chill', test: t => /r&b|soul|jazz|ambient|lo-?fi|acoustic|chill|reggae/i.test(t.genre || '') },
   focus: { title: 'Focus', test: t => /classical|instrumental|ambient|piano|soundtrack|lo-?fi|new age/i.test(t.genre || '') },
   energy: { title: 'Energy', test: t => /hip-?hop|rap|dance|electronic|afro|reggaeton|edm|house|drill|trap/i.test(t.genre || '') },
-  latenight: { title: 'Late Night', test: t => playCounts(isNight).has(t.id), note: 'From what you play after 10 pm' },
+  latenight: { title: 'Late Night', test: t => memoCounts('night', isNight).has(t.id), note: 'From what you play after 10 pm' },
   rnb: { title: 'R&B', test: t => /r&b|soul/i.test(t.genre || '') },
   hiphop: { title: 'Hip-Hop', test: t => /hip-?hop|rap/i.test(t.genre || '') },
   afrobeats: { title: 'Afrobeats', test: t => /afro|african|highlife|amapiano|naija/i.test(`${t.genre || ''}`) },
@@ -1028,7 +1067,7 @@ const artistImg = (ts, name) => {
 VIEWS.artists = () => {
   const g = [...groups('creditedArtist')].sort((a, b) => a[0].localeCompare(b[0]));
   if (!g.length) return `<div class="page-head"><h1>Artists</h1></div>${emptyLib()}`;
-  return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Artists</h1></div><span class="muted">${g.length}</span></div><div class="grid">${g.map(([a, ts]) => collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artistImg(ts, a) })).join('')}</div>`;
+  return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Artists</h1></div><span class="muted">${g.length}</span></div>${bigGrid(g, ([a, ts]) => collCard({ href: 'artist/' + a, title: a, sub: count(ts.length), tracks: ts, round: true, img: artistImg(ts, a) }))}`;
 };
 VIEWS.artist = () => {
   const name = S.param; const ts = groups('creditedArtist').get(name) || [];
@@ -1047,7 +1086,7 @@ VIEWS.artist = () => {
 VIEWS.albums = () => {
   const g = [...groups('album')].sort((a, b) => a[0].localeCompare(b[0]));
   if (!g.length) return `<div class="page-head"><h1>Albums</h1></div>${visible().length ? '<div class="empty-state small"><h2>No albums yet</h2><p>Songs with an album name show up here. You can add one from a song’s Edit info.</p></div>' : emptyLib()}`;
-  return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Albums</h1></div><span class="muted">${g.length}</span></div><div class="grid">${g.map(([k, ts]) => { const [al, ar] = k.split('\u0001'); return collCard({ href: 'album/' + k, title: al, sub: ar, tracks: ts }); }).join('')}</div>`;
+  return `<div class="page-head"><div><div class="eyebrow">Library</div><h1>Albums</h1></div><span class="muted">${g.length}</span></div>${bigGrid(g, ([k, ts]) => { const [al, ar] = k.split('\u0001'); return collCard({ href: 'album/' + k, title: al, sub: ar, tracks: ts }); })}`;
 };
 VIEWS.album = () => {
   const [al, ar] = S.param.split('\u0001');
@@ -1897,6 +1936,7 @@ function paintNow(t) {
 let bgLayer = 0, bdLayer = 0;
 /** Richer version of an artwork color for the backdrop; greys stay grey-ish instead of turning neon. */
 function vivid(hex, light, boost) {
+  if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) hex = '#2a2a33';
   const n = parseInt(hex.slice(1), 16), r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
   const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l0 = (mx + mn) / 2;
   let h = 0; const s0 = d ? d / (1 - Math.abs(2 * l0 - 1)) : 0;
@@ -4099,17 +4139,17 @@ const G_ENERGY = /hip-?hop|rap|drill|trap|dance|edm|house|electro|afro|amapiano|
 const G_HIPHOP = /hip-?hop|rap|drill|trap|grime/i;
 const G_CALM = /classical|instrumental|ambient|piano|soundtrack|lo-?fi|new age|jazz|acoustic|chill/i;
 const G_SUNDAY = /gospel|worship|christian|soul|r&b|jazz|acoustic|neo-?soul|inspirational/i;
-const hourCounts = test => playCounts(e => test(new Date(e.at)));
+const hourCounts = (key, test) => memoCounts(key, e => test(new Date(e.at)));
 const MOMENT = {
   'workout': { title: 'Workout', c: ['#ff453a', '#ff9f0a'], desc: 'High-energy songs you play the most', get: ts => favRank(ts.filter(t => isSong(t) && ((t.moods || []).some(m => m === 'workout' || m === 'energy') || G_ENERGY.test(t.genre || ''))), 50, t => (t.moods || []).includes('workout') ? 10 : 0) },
-  'drive': { title: 'Drive', c: ['#0a84ff', '#5e5ce6'], desc: 'What you play on the way to work and home, plus your favorites', get: ts => { const c = hourCounts(d => { const h = d.getHours(), w = d.getDay(); return w > 0 && w < 6 && ((h >= 6 && h < 9) || (h >= 15 && h < 19)); }); return favRank(ts.filter(t => isSong(t) && (c.get(t.id) || t.liked || (t.plays || 0) >= 3)), 50, t => (c.get(t.id) || 0) * 4); } },
+  'drive': { title: 'Drive', c: ['#0a84ff', '#5e5ce6'], desc: 'What you play on the way to work and home, plus your favorites', get: ts => { const c = hourCounts('commute', d => { const h = d.getHours(), w = d.getDay(); return w > 0 && w < 6 && ((h >= 6 && h < 9) || (h >= 15 && h < 19)); }); return favRank(ts.filter(t => isSong(t) && (c.get(t.id) || t.liked || (t.plays || 0) >= 3)), 50, t => (c.get(t.id) || 0) * 4); } },
   'on-repeat': { title: 'On Repeat', c: ['#bf5af2', '#5e5ce6'], desc: 'What you can’t stop playing this month', get: ts => { const rc = recentPlays(); return ts.filter(t => isSong(t) && (rc.get(t.id) || 0) >= 3).sort((a, b) => rc.get(b.id) - rc.get(a.id) || (b.lastPlayed || 0) - (a.lastPlayed || 0)).slice(0, 40); } },
   'afrobeats': { title: 'Afrobeats', c: ['#ff9f0a', '#30a14e'], desc: 'Your Afrobeats, Amapiano and African favorites', get: ts => favRank(ts.filter(t => isSong(t) && MOODS.afrobeats.test(t)), 60) },
   'hip-hop-heat': { title: 'Hip-Hop Heat', c: ['#ff2d55', '#7a0c24'], desc: 'The rap you play the most right now', get: ts => favRank(ts.filter(t => isSong(t) && G_HIPHOP.test(t.genre || '')), 50, t => (recentPlays().get(t.id) || 0) * 2) },
-  'late-night': { ...SMART['late-night'], c: ['#2c2c6c', '#7d3c98'], get: ts => { const c = playCounts(isNight); return favRank(ts.filter(t => isSong(t) && c.get(t.id)), 50, t => c.get(t.id) * 4); } },
+  'late-night': { ...SMART['late-night'], c: ['#2c2c6c', '#7d3c98'], get: ts => { const c = memoCounts('night', isNight); return favRank(ts.filter(t => isSong(t) && c.get(t.id)), 50, t => c.get(t.id) * 4); } },
   'focus': { title: 'Focus', c: ['#30b0c7', '#1f5f73'], desc: 'Calm, steady songs for getting work done', get: ts => favRank(ts.filter(t => isSong(t) && ((t.moods || []).some(m => m === 'focus' || m === 'chill') || G_CALM.test(t.genre || ''))), 50) },
   'old-school': { title: 'Old School', c: ['#b08d57', '#5b4636'], desc: 'Songs from 15+ years ago that you still love', get: ts => favRank(ts.filter(t => isSong(t) && +t.year && +t.year <= new Date().getFullYear() - 15), 60) },
-  'sunday': { title: 'Sunday Morning', c: ['#ffcc00', '#ff8a00'], desc: 'What you play on Sunday mornings, plus soul and gospel', get: ts => { const c = hourCounts(d => d.getDay() === 0 && d.getHours() >= 7 && d.getHours() < 14); return favRank(ts.filter(t => isSong(t) && (c.get(t.id) || G_SUNDAY.test(t.genre || ''))), 50, t => (c.get(t.id) || 0) * 4); } },
+  'sunday': { title: 'Sunday Morning', c: ['#ffcc00', '#ff8a00'], desc: 'What you play on Sunday mornings, plus soul and gospel', get: ts => { const c = hourCounts('sunday', d => d.getDay() === 0 && d.getHours() >= 7 && d.getHours() < 14); return favRank(ts.filter(t => isSong(t) && (c.get(t.id) || G_SUNDAY.test(t.genre || ''))), 50, t => (c.get(t.id) || 0) * 4); } },
 };
 delete SMART['late-night'];
 for (const [k, m] of Object.entries(MOMENT)) SMART[k] = { ...m, moment: true };
@@ -4117,7 +4157,7 @@ SMART['recently-loved'].get = ts => ts.filter(t => t.liked && Date.now() - (t.li
 function momentTile(k) {
   const d = SMART[k], ts = d.get(visible()); if (ts.length < 8) return '';
   const key = listKey(ts.map(t => t.id), d.title);
-  const arts = [...new Set(ts.map(t => artOf(t)).filter(a => a !== PLACEHOLDER))].slice(0, 3);
+  const arts = firstArts(ts, 3);
   return `<div class="card moment" data-href="smart/${k}"><div class="cover m-tile" style="--m1:${d.c[0]};--m2:${d.c[1]}">
     <div class="m-art">${arts.map(a => `<img loading="lazy" decoding="async" src="${a}" alt="">`).join('')}</div>
     <div class="m-name">${esc(d.title)}</div>
