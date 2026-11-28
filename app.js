@@ -81,6 +81,8 @@ const bytes = n => n > 1e9 ? (n / 1e9).toFixed(1) + ' GB' : (n / 1e6).toFixed(0)
 const visible = () => [...S.tracks.values()].filter(t => t.category !== 'Audiobooks' && !(S.settings.hideExplicit && t.explicit));
 /** Audiobooks: chapters are library files tagged “Audiobook”; album = book, artist = author. */
 const isBook = t => !!t && t.category === 'Audiobooks';
+/** What kind of listening this is, so the player shows the right controls. */
+const playCtx = t => !t ? 'music' : isBook(t) ? 'book' : (['ayah', 'surahrec', 'yt'].includes(t.kind) || t.category === 'Quran & Recitation') ? 'quran' : (t.kind === 'episode' || t.category === 'Talks & Lectures') ? 'talk' : 'music';
 const byAdded = (a, b) => (b.addedAt || 0) - (a.addedAt || 0);
 
 let toastT;
@@ -445,7 +447,7 @@ function mergeState(d) {
   }
   for (const e of d.eps || []) if (!S.ext.has(e.id)) S.ext.set(e.id, e);
   if (d.bookmarks) { const seen = new Set((S.bookmarks || []).map(b => b.id + b.at)); S.bookmarks = [...(S.bookmarks || []), ...d.bookmarks.filter(b => !seen.has(b.id + b.at))].sort((a, b) => b.at - a.at); kv.set('bookmarks', S.bookmarks); }
-  if (d.bookQueue) { const m = new Map((S.bookQueue || []).map(b => [b.id, b])); for (const b of d.bookQueue) if (!m.has(b.id) || (b.at || 0) > (m.get(b.id).at || 0)) m.set(b.id, b); S.bookQueue = [...m.values()].filter(b => b.status !== 'done' || Date.now() - b.at < 3 * DAY).sort((a, b) => b.added - a.added); kv.set('bookQueue', S.bookQueue); if (DESK_BOOKS) setTimeout(takeBooks, 2000); if (S.route === 'books') render(); }
+  if (d.bookQueue) { const m = new Map((S.bookQueue || []).map(b => [b.id, b])); for (const b of d.bookQueue) if (!m.has(b.id) || (b.at || 0) > (m.get(b.id).at || 0)) m.set(b.id, b); S.bookQueue = [...m.values()].sort((a, b) => b.added - a.added); kv.set('bookQueue', S.bookQueue); if (DESK_BOOKS) setTimeout(takeBooks, 2000); if (S.route === 'books') render(); }
   if (d.want) { const m = new Map((S.want || []).map(w => [w.key + (w.arrived ? '+' : ''), w])); for (const w of d.want) { const k = w.key + (w.arrived ? '+' : ''); if (!m.has(k) && !(w.arrived ? false : (S.want || []).some(x => x.key === w.key && x.arrived))) m.set(k, w); } S.want = [...m.values()].sort((a, b) => b.at - a.at); kv.set('want', S.want); }
   if (d.quranSaved) { const m = new Map((S.quranSaved || []).map(x => [x.s + ':' + x.v, x])); for (const x of d.quranSaved) if (!m.has(x.s + ':' + x.v)) m.set(x.s + ':' + x.v, x); S.quranSaved = [...m.values()]; kv.set('quranSaved', S.quranSaved); }
   if (d.quran && (d.quran.at || 0) > (S.quranSpot?.at || 0)) { S.quranSpot = d.quran; kv.set('quranSpot', S.quranSpot); }
@@ -772,7 +774,9 @@ const SMART = {
   'late-night': { title: 'Late Night', desc: 'What you play between 10 pm and 4 am', get: ts => { const c = memoCounts('night', isNight); return ts.filter(t => c.get(t.id)).sort((a, b) => c.get(b.id) - c.get(a.id)); } },
   'never-played': { title: 'Never Played', desc: 'In your library but not played yet', get: ts => ts.filter(t => !t.plays).sort(byAdded) },
 };
-const smartList = k => SMART[k] ? SMART[k].get(visible()) : [];
+/** Music only: recitations, lectures, nasheeds and books never enter mixes, Flow, radio or smart playlists. */
+const musicOnly = () => visible().filter(isSong);
+const smartList = k => SMART[k] ? SMART[k].get(musicOnly()) : [];
 const MOODS = {
   chill: { title: 'Chill', test: t => /r&b|soul|jazz|ambient|lo-?fi|acoustic|chill|reggae/i.test(t.genre || '') },
   focus: { title: 'Focus', test: t => /classical|instrumental|ambient|piano|soundtrack|lo-?fi|new age/i.test(t.genre || '') },
@@ -783,7 +787,7 @@ const MOODS = {
   afrobeats: { title: 'Afrobeats', test: t => /afro|african|highlife|amapiano|naija/i.test(`${t.genre || ''}`) },
   throwbacks: { title: 'Throwbacks', test: t => t.year && +t.year <= new Date().getFullYear() - 10, note: 'Released 10+ years ago' },
 };
-const moodList = k => MOODS[k] ? visible().filter(t => (t.moods || []).includes(k) || (!(t.moods || []).length && MOODS[k].test(t))) : [];
+const moodList = k => MOODS[k] ? musicOnly().filter(t => (t.moods || []).includes(k) || (!(t.moods || []).length && MOODS[k].test(t))) : [];
 MOODS.afrobeats.test = t => /afro|african|highlife|amapiano|naija|soukous|coup[eé]|ndombolo|makossa|zouk|bongo|gqom|azonto|hiplife/i.test(t.genre || '');
 MOODS.party = { title: 'Party', test: t => /dance|amapiano|afro|soukous|coup[eé]|reggaeton|dancehall|house/i.test(t.genre || '') };
 MOODS.workout = { title: 'Workout', test: () => false, note: 'Songs you tagged Workout' };
@@ -800,7 +804,7 @@ function similar(seeds, n = 15, exclude = new Set()) {
   const seedCats = new Set(seeds.map(t => t.category));
   const related = relatedArtists([...seedArtists]);
   const seedIds = new Set(seeds.map(t => t.id));
-  const scored = visible().filter(t => !seedIds.has(t.id)).map(t => {
+  const scored = musicOnly().filter(t => !seedIds.has(t.id)).map(t => {
     const a = mainArtist(t.artist);
     let s = Math.random() * 1.6;
     s += seedCats.has(t.category) ? 3 : -6;
@@ -825,8 +829,8 @@ function similar(seeds, n = 15, exclude = new Set()) {
 /** Artists connected to these ones by real data: shared genres and appearing together in your playlists. */
 function relatedArtists(names) {
   const set = new Set(names), out = new Set();
-  const genres = new Set(visible().filter(t => set.has(mainArtist(t.artist))).map(t => t.genre).filter(Boolean));
-  for (const t of visible()) if (t.genre && genres.has(t.genre)) out.add(mainArtist(t.artist));
+  const genres = new Set(musicOnly().filter(t => set.has(mainArtist(t.artist))).map(t => t.genre).filter(Boolean));
+  for (const t of musicOnly()) if (t.genre && genres.has(t.genre)) out.add(mainArtist(t.artist));
   for (const p of S.playlists.values()) {
     const as = p.tracks.map(id => T(id)).filter(Boolean).map(t => mainArtist(t.artist));
     if (as.some(a => set.has(a))) as.forEach(a => out.add(a));
@@ -838,7 +842,7 @@ function relatedArtists(names) {
 function flowPicks(n = 15) {
   const counts = playCounts(e => Date.now() - e.at < 90 * DAY);
   const recent = new Set([...P.played.slice(-60), ...P.queue.slice(Math.max(0, P.idx - 30), P.idx + 1)]);
-  const pool = visible().filter(t => !recent.has(t.id)).map(t => [Math.random() * (1 + (t.liked ? 3 : 0) + Math.min(counts.get(t.id) || 0, 8) * .5 + (t.plays ? .5 : 1)), t]);
+  const pool = musicOnly().filter(t => !recent.has(t.id)).map(t => [Math.random() * (1 + (t.liked ? 3 : 0) + Math.min(counts.get(t.id) || 0, 8) * .5 + (t.plays ? .5 : 1)), t]);
   pool.sort((a, b) => b[0] - a[0]);
   // smart order: each song leads into one with a similar feel (genre, loudness, era) so the mix flows
   const cand = pool.slice(0, n * 3).map(x => x[1]);
@@ -1935,7 +1939,7 @@ function peekNext() {
   if (!P.queue.length) return null;
   if (P.idx + 1 < P.queue.length) return { id: P.queue[P.idx + 1], idx: P.idx + 1 };
   if (P.repeat === 'all') return { id: P.queue[0], idx: 0 };
-  if (current()?.ext || isBook(current())) return null; // a podcast, recitation or book ends where it ends
+  if (current()?.ext || (current() && !isSong(current()))) return null; // a podcast, lecture, recitation or book ends where it ends; only music autoplays
   let more = [];
   if (P.mode === 'flow') more = flowPicks(15);
   else if (P.mode === 'radio') more = similar([T(P.seed), current()].filter(Boolean), 15);
@@ -2017,6 +2021,9 @@ function paintNow(t) {
   $('#now-mini-title').textContent = t.title; $('#now-mini-artist').textContent = t.artist; $('#now-mini-art').src = artOf(t);
   if (t.ext) delete $('#now-artist').dataset.action; else $('#now-artist').dataset.action = 'artist-more';
   document.body.classList.toggle('book-mode', isBook(t));
+  // the player adapts to what's playing: music, a book, a talk (podcast or lecture) or Quran
+  const ctx = playCtx(t); for (const c of ['music', 'book', 'talk', 'quran']) document.body.classList.toggle('ctx-' + c, ctx === c);
+  { const sp = $('#p-speed'); if (sp) sp.textContent = (P.speed || 1) + '×'; }
   { const tl = $('#tab-lyrics'); if (tl) tl.lastChild.textContent = isBook(t) ? 'Chapters' : 'Lyrics'; }
   $('#now-artist').href = isBook(t) ? '#/book/' + encodeURIComponent(bookKey(t)) : t.kind === 'yt' ? '#/feysal/' + t.albumKey : t.kind === 'episode' ? '#/show/' + t.showId : t.kind === 'ayah' ? '#/quran/' + t.surah : '#/artist/' + encodeURIComponent(mainArtist(t.artist));
   $('#now-from').textContent = P.mode === 'flow' ? 'Fof Flow' : P.context ? 'Playing from ' + P.context : '';
@@ -2337,7 +2344,7 @@ function sleepMenu(e) {
 }
 function setSleep(m) { P.sleepEnd = false; P.sleepAt = Date.now() + m * 60000; $('#sleep-btn').classList.add('on'); toast(`Music stops in ${m < 60 ? m + ' minutes' : '1 hour'}`); }
 const SPEEDS = [1, 1.25, 1.5, 2, .75];
-function cycleSpeed() { P.speed = SPEEDS[(SPEEDS.indexOf(P.speed) + 1) % SPEEDS.length]; engine.setRate(P.speed); if (isBook(current())) { P.bookRate = true; S.settings.bookSpeed = P.speed; saveSettings(); } $('#speed-btn').textContent = P.speed + '×'; $('#speed-btn').classList.toggle('on', P.speed !== 1); }
+function cycleSpeed() { P.speed = SPEEDS[(SPEEDS.indexOf(P.speed) + 1) % SPEEDS.length]; engine.setRate(P.speed); { const sp = $('#p-speed'); if (sp) sp.textContent = P.speed + '×'; } if (isBook(current())) { P.bookRate = true; S.settings.bookSpeed = P.speed; saveSettings(); } $('#speed-btn').textContent = P.speed + '×'; $('#speed-btn').classList.toggle('on', P.speed !== 1); }
 
 /* =====================================================================
    Now playing: lyrics and queue
@@ -2921,6 +2928,7 @@ document.addEventListener('click', async e => {
       case 'listen-queued': return readQueued(id, null, true);
       case 'bookmark': return addBookmark();
       case 'bookmark-go': return goBookmark(id, +a.dataset.t);
+      case 'book-finish': { for (const c of bookChapters(a.dataset.book)) S.pod.prog[c.id] = { t: c.duration || 0, d: c.duration || 0, done: true, at: Date.now() }; podSave(); toast('Marked as finished'); return render(); }
       case 'book-filter': S.bookFilter = a.dataset.f; return render();
       case 'book-read': { const ch = bookChapters(a.dataset.book); const c = ch.find(x => x.id === current()?.id) || ch[bookSpot(a.dataset.book).i]; return c && openReader(c.id); }
       case 'read-now': return current() && openReader(current().id);
@@ -3290,7 +3298,8 @@ function bookSpot(key) {
 }
 function bookStats(key) {
   const ch = bookChapters(key), total = ch.reduce((a, t) => a + (t.duration || 0), 0);
-  const heard = ch.reduce((a, t) => { const p = S.pod.prog[t.id]; return a + (p ? (p.done ? (t.duration || p.d || 0) : Math.min(p.t, t.duration || p.t)) : 0); }, 0);
+  // one progress model for the whole app: finished chapters count in full, the playing chapter counts live, others by saved position
+  const heard = ch.reduce((a, t) => { if (current()?.id === t.id && engine.el.currentTime) return a + Math.min(engine.el.currentTime, t.duration || engine.el.duration || 0); const p = S.pod.prog[t.id]; return a + (p ? (p.done ? (t.duration || p.d || 0) : Math.min(p.t, t.duration || p.t)) : 0); }, 0);
   return { total, left: Math.max(0, total - heard), pct: total ? Math.min(100, heard / total * 100) : 0 };
 }
 const leftTxt = s => { const m = Math.max(1, Math.round(s / 60)); return m >= 60 ? `${Math.floor(m / 60)} hr ${m % 60 ? (m % 60) + ' min' : ''}`.trim() : `${m} min`; };
@@ -3317,15 +3326,27 @@ function bookSpeed(on) {
 }
 function chapterPanel(t) {
   const key = bookKey(t), ch = bookChapters(key);
-  return `<div class="book-chapters"><div class="bc-head"><b>${esc(t.album || 'Chapters')}</b><span>${esc(t.artist)}</span><button class="pill-btn bc-read" data-action="read-now">${icon('read')}Read along</button></div>${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div>`;
+  return `<div class="book-chapters"><div class="bc-head"><b>${esc(t.album || 'Chapters')}</b><span>${esc(t.artist)}</span><button class="pill-btn bc-read" data-action="read-now">${icon('read')}Read along</button></div>${chapterList(ch, key)}</div>`;
 }
-function chapterRow(c, i, key) {
+/** Long chapters are recorded in parts ("Part One (2 of 3)"). Show them under one numbered chapter; each part still plays on its own. */
+function chapterList(ch, key) {
+  const out = []; let n = 0, last = null;
+  ch.forEach((c, i) => {
+    const m = /^(.*) \((\d+) of (\d+)\)$/.exec(c.title || '');
+    if (m && last === m[1]) { out.push(chapterRow(c, i, key, { part: `Part ${m[2]}`, sub: true })); return; }
+    n++; last = m ? m[1] : null;
+    if (m) { out.push(`<div class="ch-group"><span class="ch-n">${n}</span><span class="ch-t">${esc(m[1])}</span><span class="ch-time">${m[3]} parts</span></div>`); out.push(chapterRow(c, i, key, { part: `Part ${m[2]}`, sub: true })); }
+    else out.push(chapterRow(c, i, key, { n }));
+  });
+  return out.join('');
+}
+function chapterRow(c, i, key, o = {}) {
   const p = S.pod.prog[c.id], on = current()?.id === c.id, d = c.duration || p?.d || 0;
   const state = p?.done ? 'Finished' : p && p.t > 5 && d ? `${leftTxt(d - p.t)} left` : d ? leftTxt(d) : '';
   const pct = p && !p.done && d ? Math.min(100, p.t / d * 100) : 0;
-  return `<div class="chapter${on ? ' playing' : ''}${p?.done ? ' done' : ''}" data-action="book-play" data-book="${esc(key)}" data-id="${esc(c.id)}">
-    <span class="ch-n">${on && !engine.el.paused ? '<span class="eq"><i></i><i></i><i></i></span>' : p?.done ? icon('check') : i + 1}</span>
-    <span class="ch-main"><span class="ch-t ellipsis">${esc(c.title)}</span>${pct ? `<span class="pod-bar"><i style="width:${pct}%"></i></span>` : ''}</span>
+  return `<div class="chapter${on ? ' playing' : ''}${p?.done ? ' done' : ''}${o.sub ? ' sub' : ''}" data-action="book-play" data-book="${esc(key)}" data-id="${esc(c.id)}">
+    <span class="ch-n">${on && !engine.el.paused ? '<span class="eq"><i></i><i></i><i></i></span>' : p?.done ? icon('check') : o.sub ? '' : o.n || i + 1}</span>
+    <span class="ch-main"><span class="ch-t ellipsis">${esc(o.part || c.title)}</span>${pct ? `<span class="pod-bar"><i style="width:${pct}%"></i></span>` : ''}</span>
     <span class="ch-time">${esc(state)}</span></div>`;
 }
 function bookCover(t, cls = '') { return `<div class="book-cover ${cls}"><img loading="lazy" decoding="async" src="${artOf(t, cls ? 'full' : 'thumb')}" alt=""></div>`; }
@@ -3347,11 +3368,12 @@ async function epubInfo(file) {
     const opfPath = (await xml('META-INF/container.xml'))?.querySelector('rootfile')?.getAttribute('full-path'); if (!opfPath) return {};
     const opf = await xml(opfPath), base = opfPath.includes('/') ? opfPath.replace(/[^/]+$/, '') : '';
     const title = opf.getElementsByTagName('dc:title')[0]?.textContent?.trim(), author = opf.getElementsByTagName('dc:creator')[0]?.textContent?.trim();
+    const about = (new DOMParser().parseFromString(opf.getElementsByTagName('dc:description')[0]?.textContent || '', 'text/html').body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 1500);
     const items = [...opf.getElementsByTagName('item')], metaCover = [...opf.getElementsByTagName('meta')].find(m => m.getAttribute('name') === 'cover')?.getAttribute('content');
     const it = items.find(i => i.getAttribute('id') === metaCover) || items.find(i => /cover-image/.test(i.getAttribute('properties') || '')) || items.find(i => /image/.test(i.getAttribute('media-type') || '') && /cover/i.test(i.getAttribute('href') || ''));
     let cover = null;
     if (it) { const raw = await read(decodeURIComponent(base + it.getAttribute('href')).replace(/[^/]+\/\.\.\//g, '')); if (raw) { const bmp = await createImageBitmap(new Blob([raw])); const h = 420, w = Math.round(bmp.width / bmp.height * h); const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(bmp, 0, 0, w, h); cover = c.toDataURL('image/jpeg', .8); } }
-    return { title, author, cover };
+    return { title, author, cover, about };
   } catch (e) { console.warn('epub', e); return {}; }
 }
 /** Phone (or any device): the book goes to your private cloud storage; Fof Music on your Mac picks it up and narrates it. */
@@ -3365,7 +3387,7 @@ function sendBook(f) {
       try {
         const store = await cloud.uploadFile(path, new Blob([f], { type: ext === 'pdf' ? 'application/pdf' : 'application/epub+zip' }));
         const info = /\.epub$/i.test(f.name) ? await epubInfo(f) : {};
-        S.bookQueue = [{ id, name: info.title ? `${info.title}${info.author ? ` (${info.author})` : ''}` : name, file: f.name, path, r2: store === 'r2', voice: b.dataset.v, cover: info.cover || null, status: 'waiting', added: Date.now(), at: Date.now() }, ...(S.bookQueue || [])];
+        S.bookQueue = [{ id, name: info.title ? `${info.title}${info.author ? ` (${info.author})` : ''}` : name, file: f.name, path, r2: store === 'r2', voice: b.dataset.v, cover: info.cover || null, about: info.about || '', status: 'waiting', added: Date.now(), at: Date.now() }, ...(S.bookQueue || [])];
         kv.set('bookQueue', S.bookQueue); queueStatePush(); render();
         toast('Added. Tap it to start listening.');
       } catch (e) { toast('Couldn’t send the book. Try again in a moment.'); console.warn(e); }
@@ -3386,7 +3408,7 @@ async function takeBooks() {
       const url = await cloud.fileUrl(b.path, b.r2); if (!url) continue;
       const r = await fetch(url); if (!r.ok) continue;
       const buf = await r.arrayBuffer();
-      if (!b.cover && /\.epub$/i.test(b.file || '')) b.cover = (await epubInfo(new Blob([buf]))).cover || null;
+      if ((!b.cover || b.about === undefined) && /\.epub$/i.test(b.file || '')) { const i2 = await epubInfo(new Blob([buf])); b.cover = b.cover || i2.cover || null; b.about = i2.about || ''; }
       await window.fofDesktop.saveBook(b.file || b.name + '.epub', b.voice, new Uint8Array(buf));
       Object.assign(b, { status: 'narrating', line: 'Starting on your Mac…', at: Date.now() });
       kv.set('bookQueue', S.bookQueue); queueStatePush();
@@ -3677,8 +3699,8 @@ function bindReader() {
 /** "Chapter 3 of 12 · 4 hr 10 min left in book" under the player's progress bar. */
 function bookTime(t, c) {
   const el = $('#now-booktime'); if (!el) return;
-  const ch = bookChapters(bookKey(t)), n = ch.findIndex(x => x.id === t.id), rate = P.speed || 1;
-  const left = (ch.slice(n + 1).reduce((a, x) => a + (x.duration || 0), 0) + Math.max(0, (engine.el.duration || t.duration || 0) - c)) / rate;
+  const key = bookKey(t), ch = bookChapters(key), n = ch.findIndex(x => x.id === t.id), rate = P.speed || 1;
+  const left = bookStats(key).left / rate; // same number the book page shows (at 1×)
   const q = narratingFor(t.album), total = ofTotal(q?.line) || ch.length;
   el.textContent = `Chapter ${n + 1} of ${total} · ${leftTxt(left)} left${q ? ' so far' : ' in book'}${rate !== 1 ? ` at ${rate}×` : ''}`;
 }
@@ -3733,6 +3755,7 @@ function rdLook() {
 const BOOK_HOW = `Tap <b>Add a book</b> and pick an EPUB or PDF, on your iPhone or your Mac. Your Mac reads it aloud chapter by chapter in the background, and the chapters show up here on all your devices. EPUB files sound best.`;
 /** A book still being narrated on the Mac (matched to the queue item by its title). */
 const qKey = s => fold(String(s || '').replace(/\(.*?\)/g, '').replace(/^the /i, '')).replace(/[^a-z0-9]/g, '').slice(0, 24);
+function bookRecord(album) { const k = qKey(album); return (S.bookQueue || []).find(b => qKey(b.name).startsWith(k) || k.startsWith(qKey(b.name))); }
 function narratingFor(album) { const k = qKey(album); return (S.bookQueue || []).find(b => b.status !== 'done' && b.status !== 'failed' && (qKey(b.name).startsWith(k) || k.startsWith(qKey(b.name)))); }
 const ofTotal = line => +((/of (\d+)/.exec(line || '') || [])[1] || 0);
 const readyTxt = (ch, q) => { const n = ofTotal(q?.line); return n ? `${ch.length} of ${n} chapters ready` : `${ch.length} chapter${ch.length === 1 ? '' : 's'} ready`; };
@@ -3793,11 +3816,13 @@ VIEWS.book = () => {
   const label = playingHere ? 'Pause' : sp.finished ? 'Listen again' : sp.started ? 'Resume' : 'Start listening';
   return `<section class="bk-detail"><div class="bk-hero-bg"><img src="${artOf(t0, 'full')}" alt=""></div><div class="bk-detail-in">${back()}
       ${bookCover(t0, 'big')}<h1>${esc(t0.album || t0.title)}</h1><div class="bk-ha">${esc(t0.artist)}</div>
-      <div class="bk-facts">${ch.length} chapter${ch.length === 1 ? '' : 's'} · ${esc(leftTxt(st.total))}${sp.started && !sp.finished ? ` · ${esc(leftTxt(st.left))} left` : ''}${q ? ` · ${readyTxt(ch, q)}, more on the way` : ''}</div>
+      <div class="bk-by">${bookRecord(t0.album) ? `Narrated by Fof · ${bookRecord(t0.album).voice === 'british' ? 'Deep British voice' : 'Deep American voice'}` : ''}</div>
+      <div class="bk-facts">${q ? `${esc(readyTxt(ch, q))} · ${esc(leftTxt(st.total))} so far${sp.started && !sp.finished ? ` · ${esc(leftTxt(st.left))} left of that` : ''}` : `${ch.length} chapter${ch.length === 1 ? '' : 's'} · ${esc(leftTxt(st.total))}${sp.started && !sp.finished ? ` · ${esc(leftTxt(st.left))} left` : ''}`}</div>
       ${sp.started && !sp.finished ? `<div class="bk-dp"><span class="pod-bar"><i style="width:${st.pct}%"></i></span></div><div class="bk-at ellipsis">${esc(ch[sp.i].title)}</div>` : ''}
       <div class="bk-acts"><button class="bk-btn light" data-action="book-play" data-book="${esc(key)}">${icon(playingHere ? 'pause' : 'play')}${label}</button><button class="bk-btn glass" data-action="book-read" data-book="${esc(key)}">${icon('read')}Read</button></div>
-      ${sp.started ? `<button class="link bk-restart" data-action="book-restart" data-book="${esc(key)}">Start over</button>` : ''}</div></section>
-    ${bookmarksHtml(key)}<section class="section bk-chs"><div class="section-head"><h2>Chapters</h2></div><div class="book-chapters">${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div></section>`;
+      <div class="bk-links">${sp.started ? `<button class="link bk-restart" data-action="book-restart" data-book="${esc(key)}">Start over</button>` : ''}${!sp.finished ? `<button class="link bk-restart" data-action="book-finish" data-book="${esc(key)}">Mark as finished</button>` : ''}</div></div></section>
+    ${bookRecord(t0.album)?.about ? `<section class="section bk-about"><div class="section-head"><h2>About this book</h2></div><p>${esc(bookRecord(t0.album).about)}</p></section>` : ''}
+    ${bookmarksHtml(key)}<section class="section bk-chs"><div class="section-head"><h2>Chapters</h2></div><div class="book-chapters">${chapterList(ch, key)}</div></section>`;
 };
 VIEWS.podcasts = () => {
   S.pod.subs.forEach(s => showEps(s.id));
@@ -4635,7 +4660,7 @@ function heroRelease(a) {
 function updatedPlaylists() {
   const wk = Date.now() - 7 * DAY, out = [];
   for (const p of S.playlists.values()) { const n = (p.added || []).filter(x => !x.removed && x.at > wk && p.tracks.includes(x.id)).length; if (n) out.push({ href: 'playlist/' + p.id, title: p.name, sub: `${n} new this week`, tracks: p.tracks.map(id => T(id)).filter(Boolean), img: S.plCovers.get(p.id) }); }
-  for (const k of ['on-repeat', 'recently-loved', 'drive', 'workout']) { const d = SMART[k]; const ts = d?.get(visible()) || []; if (ts.length >= 5) out.push({ href: 'smart/' + k, title: d.title, sub: 'Updated today', tracks: ts }); }
+  for (const k of ['on-repeat', 'recently-loved', 'drive', 'workout']) { const d = SMART[k]; const ts = d?.get(musicOnly()) || []; if (ts.length >= 5) out.push({ href: 'smart/' + k, title: d.title, sub: 'Updated today', tracks: ts }); }
   return out;
 }
 VIEWS.new = () => {
@@ -4850,7 +4875,7 @@ delete SMART['late-night'];
 for (const [k, m] of Object.entries(MOMENT)) SMART[k] = { ...m, moment: true };
 SMART['recently-loved'].get = ts => ts.filter(t => t.liked && Date.now() - (t.likedAt || 0) < 30 * DAY).sort((a, b) => (b.likedAt || 0) - (a.likedAt || 0));
 function momentTile(k) {
-  const d = SMART[k], ts = d.get(visible()); if (ts.length < 8) return '';
+  const d = SMART[k], ts = d.get(musicOnly()); if (ts.length < 8) return '';
   const key = listKey(ts.map(t => t.id), d.title);
   const arts = firstArts(ts, 3);
   return `<div class="card moment" data-href="smart/${k}"><div class="cover m-tile" style="--m1:${d.c[0]};--m2:${d.c[1]}">

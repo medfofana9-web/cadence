@@ -1676,3 +1676,23 @@ body:not(.is-paused) .dr-play .when-paused{display:none}
 #mark-btn svg{width:16px;height:16px}
 .book-mode #tab-queue,.book-mode #ic-queue{display:none}
 @media (max-width:700px){.book-mode #mark-btn span,.book-mode #read-btn span{display:none}.book-mode #mark-btn,.book-mode #read-btn{padding:0 11px}}
+/* ---------- Context-aware player: music / book / talk / Quran ---------- */
+.talk-only{display:none}
+.ctx-book .talk-only,.ctx-talk .talk-only{display:inline-flex}
+.ctx-book .music-only,.ctx-talk .music-only,.ctx-quran .music-only{display:none}
+.ctx-book #p-shuffle,.ctx-talk #p-shuffle,.ctx-quran #p-shuffle,.ctx-book #p-repeat,.ctx-talk #p-repeat{display:none}
+.ctx-book #p-like,.ctx-book #now-like{display:none}
+.ctx-talk #now-shuffle,.ctx-quran #now-shuffle,.ctx-talk #now-repeat{display:none}
+.ctx-talk .now-controls .book-only[data-action^=skip]{display:inline-flex}
+.p-controls .icon-btn.skip svg{width:24px;height:24px}
+.p-speed{height:28px;min-width:42px;padding:0 9px;font-size:12.5px;font-variant-numeric:tabular-nums}
+.ch-group{display:grid;grid-template-columns:34px 1fr auto;gap:12px;align-items:center;min-height:46px;padding:0 10px;border-bottom:1px solid var(--line-2)}
+.ch-group .ch-t{font-size:15px;font-weight:600}
+.ch-group .ch-n{color:var(--muted)}
+.chapter.sub{padding-left:56px;min-height:48px}
+.chapter.sub .ch-n{width:18px}
+.chapter.sub .ch-t{font-size:14px;color:var(--text-2,var(--text))}
+.now-panel .ch-group{border-color:rgba(255,255,255,.08)}
+.bk-by{margin-top:6px;font-size:12.5px;color:rgba(255,255,255,.6)}
+.bk-links{display:flex;gap:18px;justify-content:center}
+.bk-about p{max-width:720px;line-height:1.6;color:var(--text-2,var(--text));font-size:15px}
