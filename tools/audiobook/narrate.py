@@ -28,8 +28,8 @@ def sentences(text, limit):
                 cut = cut if cut > limit // 3 else s.rfind(' ', 0, limit)
                 if buf: yield buf, False; buf = ''
                 yield s[:cut + 1].strip(), False; s = s[cut + 1:].strip()
-            if len(buf) + len(s) + 1 > limit and buf: yield buf, False; buf = ''
-            buf = (buf + ' ' + s).strip()
+            if buf: yield buf, False
+            buf = s.strip()
         if buf: yield buf, True                      # True = end of paragraph (longer pause)
 
 
@@ -71,9 +71,10 @@ class Chatterbox:
         return w.squeeze(0).cpu().numpy()
 
 
-def to_mp3(wav, sr, path, tags, cover):
+def to_mp3(wav, sr, path, tags, cover, read=None):
     import soundfile as sf, imageio_ffmpeg
-    from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TCON, TRCK, APIC, ID3NoHeaderError
+    from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TCON, TRCK, APIC, TXXX, ID3NoHeaderError
+    import zlib, base64
     tmp = path + '.wav'
     sf.write(tmp, wav, sr)
     subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-y', '-loglevel', 'error', '-i', tmp,
@@ -86,6 +87,8 @@ def to_mp3(wav, sr, path, tags, cover):
     id3.add(TCON(encoding=3, text='Audiobook')); id3.add(TRCK(encoding=3, text=f"{tags['n']}/{tags['of']}"))
     if cover and os.path.exists(cover):
         id3.add(APIC(encoding=3, mime='image/png' if cover.endswith('png') else 'image/jpeg', type=3, desc='Cover', data=open(cover, 'rb').read()))
+    if read:  # the chapter's text with when each sentence is spoken, for Read along in Fof Music
+        id3.add(TXXX(encoding=3, desc='FOFREAD', text=base64.b64encode(zlib.compress(json.dumps(read, ensure_ascii=False, separators=(',', ':')).encode(), 9)).decode()))
     id3.save(path + '.part.mp3', v2_version=3)
     os.replace(path + '.part.mp3', path)   # appears all at once, so Fof Music never imports a half-written file
 
@@ -115,15 +118,18 @@ def main():
         if a.limit_words: text = ' '.join(text.split()[:a.limit_words])
         chunks = [(ch['title'] + '.', True)] + list(sentences(text, tts.limit))
         out, t0 = [np.zeros(int(tts.sr * 0.6), dtype=np.float32)], time.time()
+        pos, read = int(tts.sr * 0.6), []   # read: [start ms, shown text, 1 if a paragraph ends here]
         for k, (c, para_end) in enumerate(chunks):
-            c = speakable(c)
-            if not re.search(r'\w', c): continue
-            try: w = tts(c)
+            said = speakable(c)
+            if not re.search(r'\w', said): continue
+            try: w = tts(said)
             except Exception as e: say(step='warn', chunk=k, error=str(e)[:200]); continue
-            out += [w.astype(np.float32), np.zeros(int(tts.sr * (0.75 if para_end else 0.28)), dtype=np.float32)]
+            read.append([round(pos / tts.sr * 1000), c.strip(), 1 if para_end else 0])
+            gap = int(tts.sr * (0.75 if para_end else 0.28))
+            out += [w.astype(np.float32), np.zeros(gap, dtype=np.float32)]; pos += len(w) + gap
             if k % 10 == 0: say(step='progress', n=i, of=len(chs), chunk=k, chunks=len(chunks), chapter=ch['title'])
         out.append(np.zeros(int(tts.sr * 1.2), dtype=np.float32))
-        to_mp3(np.concatenate(out), tts.sr, dest, {'title': ch['title'], 'author': book['author'], 'book': book['title'], 'n': i, 'of': len(chs)}, cover)
+        to_mp3(np.concatenate(out), tts.sr, dest, {'title': ch['title'], 'author': book['author'], 'book': book['title'], 'n': i, 'of': len(chs)}, cover, {'v': 1, 's': read})
         say(step='chapter', n=i, of=len(chs), chapter=ch['title'], seconds=round(time.time() - t0))
     say(step='done', title=book['title'], folder=folder)
 

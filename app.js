@@ -1494,6 +1494,7 @@ async function importOne(j, known) {
   t.artist = meta.tidyArtist(t.artist);
   if (!t.genre && t.artist !== 'Unknown Artist') { const sib = [...S.tracks.values()].find(x => x.genre && mainArtist(x.artist) === mainArtist(t.artist)); if (sib) t.genre = sib.genre; }
   t.category = meta.categorize(t);
+  if (tags.read && t.category === 'Audiobooks') t.read = tags.read;
   Object.assign(j, { title: t.title, artist: t.artist }); updateImportRow(j);
   t.duration = await meta.audioDuration(f);
   if (!t.duration && !/\.(mp3|m4a|aac|wav|flac|ogg|opus|webm)$/i.test(f.name)) throw new Error('unplayable');
@@ -2908,6 +2909,9 @@ document.addEventListener('click', async e => {
       case 'skip-back': { const el = engine.el; el.currentTime = Math.max(0, el.currentTime - 15); return; }
       case 'skip-fwd': { const el = engine.el; el.currentTime = Math.min((el.duration || 1e9) - 1, el.currentTime + 30); return; }
       case 'book-restart': return bookRestart(a.dataset.book);
+      case 'book-read': { const ch = bookChapters(a.dataset.book); const c = ch.find(x => x.id === current()?.id) || ch[bookSpot(a.dataset.book).i]; return c && openReader(c.id); }
+      case 'read-now': return current() && openReader(current().id);
+      case 'rd-open': RD.id = id; return paintReader();
       case 'artist-more': e.preventDefault(); return artistSheet();
       case 'want': { e.stopPropagation(); try { return toggleWant(JSON.parse(a.dataset.w)); } catch { return; } }
       case 'want-x': { e.stopPropagation(); S.want = wants().filter(w => w.key !== a.dataset.key || w.arrived); saveWant(); updateAddTabs(); return render(); }
@@ -3198,6 +3202,7 @@ window.addEventListener('pagehide', () => { flushListen(); savePlayer(true); });
   n.addEventListener('touchend', e => { if (y0 === null) return; const dy = e.changedTouches[0].clientY - y0, dx = e.changedTouches[0].clientX - x0; if (dy > 90 && Math.abs(dx) < 60) closeNow(); else if (Math.abs(dx) > 80 && Math.abs(dy) < 40 && e.target.closest('.now-art')) dx < 0 ? next() : prev(); y0 = null; });
 })();
 
+bindReader();
 boot();
 
 /* =====================================================================
@@ -3299,7 +3304,7 @@ function bookSpeed(on) {
 }
 function chapterPanel(t) {
   const key = bookKey(t), ch = bookChapters(key);
-  return `<div class="book-chapters"><div class="bc-head"><b>${esc(t.album || 'Chapters')}</b><span>${esc(t.artist)}</span></div>${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div>`;
+  return `<div class="book-chapters"><div class="bc-head"><b>${esc(t.album || 'Chapters')}</b><span>${esc(t.artist)}</span><button class="pill-btn bc-read" data-action="read-now">${icon('read')}Read along</button></div>${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div>`;
 }
 function chapterRow(c, i, key) {
   const p = S.pod.prog[c.id], on = current()?.id === c.id, d = c.duration || p?.d || 0;
@@ -3364,6 +3369,149 @@ if (DESK_BOOKS) {
     kv.set('bookQueue', S.bookQueue); queueStatePush(); if (S.route === 'books') render();
   });
 }
+/* ---------- Reader: Read along (sentence lights up as it's spoken) and Page (paper, like Apple Books) ---------- */
+const RD = { id: null, mode: 'along', idx: -1, page: 0 };
+const rdPrefs = () => ({ mode: 'along', theme: 'paper', size: 19, ...(S.settings.reader || {}) });
+function rdSave(p) { S.settings.reader = { ...rdPrefs(), ...p }; saveSettings(); }
+const rdText = t => t?.read?.s || null;
+function rdIndexAt(t, sec) { const s = rdText(t); if (!s) return -1; const ms = sec * 1000 + 120; let lo = 0, hi = s.length - 1, r = 0; while (lo <= hi) { const m = (lo + hi) >> 1; if (s[m][0] <= ms) { r = m; lo = m + 1; } else hi = m - 1; } return r; }
+/** Opens the reader on a chapter: the one playing, else where you left off in that book. */
+function openReader(id) {
+  const t = T(id); if (!t) return;
+  const p = rdPrefs(); RD.id = id; RD.mode = p.mode; RD.idx = -1; RD.page = -1;
+  const el = $('#reader'); el.hidden = false; requestAnimationFrame(() => el.classList.add('open'));
+  document.body.classList.add('reading');
+  history.pushState({ reader: true }, '');
+  paintReader();
+}
+function closeReader() { const el = $('#reader'); if (el.hidden) return; el.classList.remove('open'); document.body.classList.remove('reading'); setTimeout(() => { el.hidden = true; $('#rd-body').innerHTML = ''; }, 320); RD.id = null; }
+window.addEventListener('popstate', () => { if (RD.id) closeReader(); });
+function rdSpot(t) { // where to start reading: the playing position, else your saved place in this chapter
+  if (current()?.id === t.id) return engine.el.currentTime || 0;
+  const p = S.pod.prog[t.id]; return p && !p.done ? p.t : 0;
+}
+function paintReader() {
+  const t = T(RD.id); if (!t) return;
+  const p = rdPrefs(), el = $('#reader'), s = rdText(t), ch = bookChapters(bookKey(t)), n = ch.findIndex(c => c.id === t.id);
+  el.dataset.mode = RD.mode; el.dataset.theme = p.theme; el.style.setProperty('--rd-size', p.size + 'px');
+  el.style.cssText += ';' + ambient(t.colors || colorsOf(ch));
+  $('#rd-book').textContent = t.album || ''; $('#rd-ch').textContent = t.title;
+  $$('#reader .seg button').forEach(b => b.classList.toggle('on', b.dataset.mode === RD.mode));
+  const body = $('#rd-body');
+  if (!s) { body.innerHTML = `<div class="rd-none"><h2>The text isn’t in this chapter</h2><p>Books narrated from now on include the text, so you can read along. Narrate this book again to add it.</p></div>`; rdControls(); return; }
+  let html = '', para = [];
+  const flush = (sub) => { if (para.length) html += `<p class="rd-p${sub ? ' rd-sub' : ''}">${para.join(' ')}</p>`; para = []; };
+  s.forEach(([ms, txt, end], i) => { if (end && !para.length && txt.length < 60 && txt === txt.toUpperCase() && /[A-Z]/.test(txt)) { para.push(`<span class="rd-s" data-i="${i}" data-ms="${ms}">${esc(txt)}</span>`); return flush(true); } para.push(`<span class="rd-s" data-i="${i}" data-ms="${ms}">${esc(txt)}</span>`); if (end) flush(); });
+  flush();
+  const nextCh = ch[n + 1];
+  body.innerHTML = `<div class="rd-flow"><div class="rd-head"><div class="rd-eyebrow">${esc(t.album || '')}</div><h1>${esc(t.title)}</h1></div>${html}
+    <div class="rd-end">${nextCh ? `<button class="rd-next" data-action="rd-open" data-id="${esc(nextCh.id)}"><span>Next</span><b>${esc(nextCh.title)}</b></button>` : `<div class="rd-fin">The end</div>`}</div></div>`;
+  RD.idx = -1; RD.page = -1;
+  if (RD.mode === 'page') rdPaginate();
+  rdFollow(rdSpot(t), true);
+  rdControls();
+}
+function rdPaginate() {
+  const body = $('#rd-body'), flow = body.querySelector('.rd-flow'); if (!flow) return;
+  body.style.setProperty('--pw', body.clientWidth + 'px');
+  requestAnimationFrame(() => { RD.pages = Math.max(1, Math.round(flow.scrollWidth / body.clientWidth)); rdPageLabel(); });
+}
+function rdPageLabel() { const b = $('#rd-body'); const i = Math.round(b.scrollLeft / Math.max(1, b.clientWidth)); RD.page = i; $('#rd-pos').textContent = RD.mode === 'page' ? `${i + 1} of ${RD.pages || 1}` : ''; }
+function rdTurn(dir) { const b = $('#rd-body'); RD.userScrolled = Date.now(); const to = Math.max(0, Math.min((RD.pages || 1) - 1, Math.round(b.scrollLeft / b.clientWidth) + dir)); b.scrollTo({ left: to * b.clientWidth, behavior: 'smooth' }); }
+/** Lights up the sentence being spoken and keeps it in view (or turns to its page). */
+function rdFollow(sec, jump = false) {
+  const t = T(RD.id); if (!t || !rdText(t)) return;
+  const i = rdIndexAt(t, sec); if (i === RD.idx && !jump) return;
+  const body = $('#rd-body'), old = body.querySelector('.rd-s.cur'); if (old) old.classList.remove('cur');
+  body.querySelectorAll('.rd-s.past').forEach(x => { if (+x.dataset.i >= i) x.classList.remove('past'); });
+  const cur = body.querySelector(`.rd-s[data-i="${i}"]`); if (!cur) return;
+  for (let k = Math.max(0, RD.idx < 0 || RD.idx > i ? 0 : RD.idx); k < i; k++) body.querySelector(`.rd-s[data-i="${k}"]`)?.classList.add('past');
+  cur.classList.add('cur'); RD.idx = i;
+  if (RD.userScrolled && Date.now() - RD.userScrolled < 4000 && !jump) return;
+  const place = () => { const cr = cur.getClientRects()[0] || cur.getBoundingClientRect(), br = body.getBoundingClientRect();
+  if (RD.mode === 'page') { const pg = Math.floor((cr.left - br.left + body.scrollLeft + 2) / body.clientWidth); if (pg !== RD.page) { body.scrollTo({ left: pg * body.clientWidth, behavior: jump ? 'instant' : 'smooth' }); RD.page = pg; } }
+  else body.scrollTo({ top: cur.parentElement.offsetTop + (cr.top - cur.parentElement.getBoundingClientRect().top) - body.clientHeight * .36, behavior: jump ? 'instant' : 'smooth' }); };
+  place(); if (jump) { requestAnimationFrame(place); setTimeout(place, 450); }
+}
+function rdControls() {
+  const t = T(RD.id); if (!t) return;
+  const playing = current()?.id === t.id && !engine.el.paused;
+  $('#rd-play use').setAttribute('href', playing ? '#i-pause' : '#i-play');
+  $('#rd-speed').textContent = (isBook(current()) ? P.speed || 1 : rdPrefs().speed || S.settings.bookSpeed || 1) + '×';
+  const d = (current()?.id === t.id ? engine.el.duration : 0) || t.duration || 0, c = current()?.id === t.id ? engine.el.currentTime : rdSpot(t);
+  $('#rd-bar i').style.width = d ? Math.min(100, c / d * 100) + '%' : '0';
+  $('#rd-left').textContent = d ? `${leftTxt(d - c)} left in chapter` : '';
+}
+/** Play from a sentence (or from where you are). */
+async function rdPlayAt(i) {
+  const t = T(RD.id); if (!t) return;
+  const at = i >= 0 && rdText(t) ? rdText(t)[i][0] / 1000 : null;
+  if (current()?.id !== t.id) {
+    const key = bookKey(t), ch = bookChapters(key);
+    if (at !== null) { S.pod.prog[t.id] = { t: Math.max(0, at - .2), d: t.duration || 0, done: false, at: Date.now() }; }
+    await playList(ch.map(x => x.id), ch.findIndex(x => x.id === t.id), { context: t.album || 'Audiobook', ctxRoute: 'book/' + encodeURIComponent(key) });
+  } else {
+    if (at !== null) { engine.el.currentTime = Math.max(0, at - .2); if (engine.el.paused) engine.el.play(); }
+    else toggle();
+  }
+  RD.userScrolled = 0; setTimeout(rdControls, 150);
+}
+// keep the reader in step with playback
+setInterval(() => {
+  if (!RD.id || $('#reader').hidden) return;
+  const c = current();
+  if (c && isBook(c) && c.id !== RD.id && bookKey(c) === bookKey(T(RD.id) || {}) && !engine.el.paused) { RD.id = c.id; paintReader(); return; }
+  if (c?.id === RD.id && !engine.el.paused) rdFollow(engine.el.currentTime);
+  rdControls();
+}, 250);
+function bindReader() {
+  const r = $('#reader'), body = $('#rd-body');
+  r.addEventListener('click', e => {
+    const a = e.target.closest('[data-rd]'); if (a) { e.stopPropagation(); const k = a.dataset.rd;
+      if (k === 'close') { history.back(); return; }
+      if (k === 'mode') { RD.mode = a.dataset.mode; rdSave({ mode: RD.mode }); paintReader(); return; }
+      if (k === 'play') return rdPlayAt(current()?.id === RD.id ? -1 : RD.idx);
+      if (k === 'back') { if (current()?.id === RD.id) engine.el.currentTime = Math.max(0, engine.el.currentTime - 15); return; }
+      if (k === 'fwd') { if (current()?.id === RD.id) engine.el.currentTime += 30; return; }
+      if (k === 'speed') { if (isBook(current())) cycleSpeed(); else { const v = SPEEDS[(SPEEDS.indexOf(S.settings.bookSpeed || 1) + 1) % SPEEDS.length]; S.settings.bookSpeed = v; saveSettings(); } rdControls(); return; }
+      if (k === 'chapters') return rdChapters();
+      if (k === 'aa') return rdLook();
+      return;
+    }
+    const sp = e.target.closest('.rd-s');
+    if (RD.swiped && Date.now() - RD.swiped < 400) return;
+    if (RD.mode === 'page') { // tap the edges to turn, like a book
+      const x = e.clientX / window.innerWidth;
+      if (x < .22) return rdTurn(-1); if (x > .78) return rdTurn(1);
+    }
+    if (sp) { haptic(); rdPlayAt(+sp.dataset.i); }
+  });
+  const mark = () => { RD.userScrolled = Date.now(); };
+  body.addEventListener('touchstart', mark, { passive: true }); body.addEventListener('wheel', mark, { passive: true });
+  body.addEventListener('scroll', () => { if (RD.mode === 'page') rdPageLabel(); }, { passive: true });
+  let sx = null, sy = 0;
+  body.addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  body.addEventListener('touchend', e => { if (sx === null || RD.mode !== 'page') return; const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy; sx = null; if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) { RD.swiped = Date.now(); rdTurn(dx < 0 ? 1 : -1); } }, { passive: true });
+  window.addEventListener('resize', () => { if (RD.id && RD.mode === 'page') { rdPaginate(); rdFollow(rdSpot(T(RD.id)), true); } });
+  document.addEventListener('keydown', e => { if (!RD.id || $('#reader').hidden) return; if (e.key === 'Escape') history.back(); if (RD.mode === 'page' && e.key === 'ArrowRight') rdTurn(1); if (RD.mode === 'page' && e.key === 'ArrowLeft') rdTurn(-1); if (e.key === ' ') { e.preventDefault(); rdPlayAt(-1); } });
+}
+function rdChapters() {
+  const t = T(RD.id), key = bookKey(t), ch = bookChapters(key);
+  sheet(`<h2>${esc(t.album || 'Chapters')}</h2><div class="rd-chlist">${ch.map((c, i) => `<button class="rd-chrow${c.id === RD.id ? ' on' : ''}" data-id="${esc(c.id)}"><span class="ch-n">${i + 1}</span><span class="ellipsis">${esc(c.title)}</span><span class="ch-time">${c.duration ? leftTxt(c.duration) : ''}</span></button>`).join('')}</div>`, el => {
+    el.querySelectorAll('.rd-chrow').forEach(b => b.onclick = () => { closeSheet(); RD.id = b.dataset.id; paintReader(); });
+    el.querySelector('.rd-chrow.on')?.scrollIntoView({ block: 'center' });
+  });
+}
+function rdLook() {
+  const p = rdPrefs();
+  sheet(`<h2>Text</h2><div class="rd-look">
+    <div class="rd-sizes"><button data-sz="-1" aria-label="Smaller text">A</button><button data-sz="1" aria-label="Larger text">A</button></div>
+    <div class="rd-themes">${[['paper', 'Paper'], ['sepia', 'Sepia'], ['gray', 'Gray'], ['night', 'Night']].map(([k, l]) => `<button class="rd-th th-${k}${p.theme === k ? ' on' : ''}" data-th="${k}"><span>Aa</span><em>${l}</em></button>`).join('')}</div>
+    <p class="muted rd-look-note">Themes change Page mode. Read along always uses the book’s colors.</p></div>`, el => {
+    el.querySelectorAll('[data-sz]').forEach(b => b.onclick = () => { const sz = Math.max(15, Math.min(30, rdPrefs().size + +b.dataset.sz)); rdSave({ size: sz }); $('#reader').style.setProperty('--rd-size', sz + 'px'); if (RD.mode === 'page') { rdPaginate(); rdFollow(rdSpot(T(RD.id)), true); } });
+    el.querySelectorAll('[data-th]').forEach(b => b.onclick = () => { rdSave({ theme: b.dataset.th }); el.querySelectorAll('[data-th]').forEach(x => x.classList.toggle('on', x === b)); $('#reader').dataset.theme = b.dataset.th; });
+  });
+}
 const BOOK_HOW = `Tap <b>Add a book</b> and pick an EPUB or PDF, on your iPhone or your Mac. Your Mac reads it aloud chapter by chapter in the background, and the chapters show up here on all your devices. EPUB files sound best.`;
 VIEWS.books = () => {
   const all = [...books()].map(([k, ch]) => [k, ch, bookSpot(k)]);
@@ -3377,7 +3525,7 @@ VIEWS.books = () => {
     heroHtml = `<section class="book-hero" style="${ambient(t.colors || colorsOf(ch))}">${bookCover(t, 'big')}
       <div class="bh-meta"><div class="eyebrow">Continue listening</div><h2>${esc(t.album)}</h2><div class="muted">${esc(t.artist)}</div>
       <div class="bh-now">${esc(t.title)}</div><div class="bh-bar"><span class="pod-bar"><i style="width:${st.pct}%"></i></span><span>${esc(leftTxt(st.left))} left</span></div>
-      <button class="btn primary" data-action="book-play" data-book="${esc(k)}">${icon(current()?.id === t.id && !engine.el.paused ? 'pause' : 'play')}${current()?.id === t.id && !engine.el.paused ? 'Pause' : 'Resume'}</button></div></section>`;
+      <div class="row-actions"><button class="btn primary" data-action="book-play" data-book="${esc(k)}">${icon(current()?.id === t.id && !engine.el.paused ? 'pause' : 'play')}${current()?.id === t.id && !engine.el.paused ? 'Pause' : 'Resume'}</button><button class="btn" data-action="book-read" data-book="${esc(k)}">${icon('read')}Read</button></div></div></section>`;
   }
   return `<div class="page-head"><h1>Audiobooks</h1>${add}</div>${heroHtml}${bookQueueHtml()}
     <section class="section"><div class="section-head"><h2>Your Books</h2></div><div class="book-grid">${all.map(([k, ch]) => bookCard([k, ch])).join('')}</div></section>
@@ -3392,7 +3540,7 @@ VIEWS.book = () => {
     <div class="bkh-meta"><div class="eyebrow">Audiobook</div><h1>${esc(t0.album || t0.title)}</h1><div class="muted">${esc(t0.artist)}</div>
     <div class="bkh-facts">${ch.length} chapter${ch.length === 1 ? '' : 's'} · ${esc(leftTxt(st.total))}${sp.started && !sp.finished ? ` · ${esc(leftTxt(st.left))} left` : ''}</div>
     ${sp.started && !sp.finished ? `<div class="bh-bar"><span class="pod-bar"><i style="width:${st.pct}%"></i></span></div>` : ''}
-    <div class="row-actions"><button class="btn primary" data-action="book-play" data-book="${esc(key)}">${icon(playingHere ? 'pause' : 'play')}<span class="ellipsis">${esc(label)}</span></button>${sp.started ? `<button class="btn ghost" data-action="book-restart" data-book="${esc(key)}">Start over</button>` : ''}</div></div></div>
+    <div class="row-actions"><button class="btn primary" data-action="book-play" data-book="${esc(key)}">${icon(playingHere ? 'pause' : 'play')}<span class="ellipsis">${esc(label)}</span></button><button class="btn" data-action="book-read" data-book="${esc(key)}">${icon('read')}Read</button>${sp.started ? `<button class="btn ghost" data-action="book-restart" data-book="${esc(key)}">Start over</button>` : ''}</div></div></div>
     <section class="section"><div class="section-head"><h2>Chapters</h2></div><div class="book-chapters">${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div></section>`;
 };
 VIEWS.podcasts = () => {
@@ -4796,7 +4944,7 @@ const ACT2 = {
 };
 
 /* for checking things from the console */
-window.__fof = { growPlaylists, cleanupScan, runCleanup, undoCleanup, S, P };
+window.__fof = { openReader, rdFollow: s => rdFollow(s, true), growPlaylists, cleanupScan, runCleanup, undoCleanup, S, P };
 
 /* =====================================================================
    Mac app: imports new songs from your folders in the background and
