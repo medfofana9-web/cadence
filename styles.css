@@ -1653,3 +1653,7 @@ body:not(.is-paused) .dr-play .when-paused{display:none}
 
 .reader[data-mode=page]{--pad:24px}
 @media (min-width:700px){.reader[data-mode=page]{--pad:40px}}
+.rd-right{display:flex;align-items:center;gap:4px;justify-self:end}
+.rd-voice{display:none}
+.rd-textonly .rd-voice{display:inline-block}
+.voice-pick .btn svg{width:16px;height:16px}

@@ -3568,7 +3568,7 @@ function rdFollow(sec, jump = false, at = null) {
 }
 function rdControls() {
   const t = rdT(RD.id); if (!t) return;
-  if (RD.v?.map.has(t.id)) { $('#rd-play use').setAttribute('href', TTS.on ? '#i-pause' : '#i-play'); $('#rd-speed').textContent = (S.settings.bookSpeed || 1) + '×'; if (!TTS.on) $('#rd-left').textContent = `${RD.v.voice === 'british' ? 'Deep British' : 'Deep American'} voice · tap play or any sentence`; return; }
+  if (RD.v?.map.has(t.id)) { $('#rd-play use').setAttribute('href', TTS.on ? '#i-pause' : '#i-play'); $('#rd-speed').textContent = (S.settings.bookSpeed || 1) + '×'; if (!TTS.on) $('#rd-left').textContent = 'Tap play or any sentence'; $('#rd-voice').textContent = RD.v.voice === 'british' ? 'British' : 'American'; return; }
   const playing = current()?.id === t.id && !engine.el.paused;
   $('#rd-play use').setAttribute('href', playing ? '#i-pause' : '#i-play');
   $('#rd-speed').textContent = (isBook(current()) ? P.speed || 1 : rdPrefs().speed || S.settings.bookSpeed || 1) + '×';
@@ -3610,6 +3610,7 @@ function bindReader() {
       if (k === 'speed' && RD.v?.map.has(RD.id)) { S.settings.bookSpeed = SPEEDS[(SPEEDS.indexOf(S.settings.bookSpeed || 1) + 1) % SPEEDS.length]; saveSettings(); if (TTS.on) ttsFrom(RD.idx); rdControls(); return; }
       if (k === 'speed') { if (isBook(current())) cycleSpeed(); else { const v = SPEEDS[(SPEEDS.indexOf(S.settings.bookSpeed || 1) + 1) % SPEEDS.length]; S.settings.bookSpeed = v; saveSettings(); } rdControls(); return; }
       if (k === 'chapters') return rdChapters();
+      if (k === 'voice') return rdVoice();
       if (k === 'aa') return rdLook();
       return;
     }
@@ -3630,6 +3631,19 @@ function bindReader() {
   body.addEventListener('touchend', e => { if (sx === null || RD.mode !== 'page') return; const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy; sx = null; if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) { RD.swiped = Date.now(); rdTurn(dx < 0 ? 1 : -1); } }, { passive: true });
   window.addEventListener('resize', () => { if (RD.id && RD.mode === 'page') { rdPaginate(); rdFollow(rdSpot(rdT(RD.id)), true); } });
   document.addEventListener('keydown', e => { if (!RD.id || $('#reader').hidden) return; if (e.key === 'Escape') history.back(); if (RD.mode === 'page' && e.key === 'ArrowRight') rdTurn(1); if (RD.mode === 'page' && e.key === 'ArrowLeft') rdTurn(-1); if (e.key === ' ') { e.preventDefault(); rdPlayAt(-1); } });
+}
+/** Switch narrator for a book that's playing in the app's own voice. */
+function rdVoice() {
+  if (!RD.v) return toast('This book was narrated on your Mac in its voice');
+  const b = (S.bookQueue || []).find(x => x.id === RD.v.list[0].id.split(':')[0]), cur = RD.v.voice || 'american';
+  sheet(`<h2>Narrator</h2><div class="voice-pick">${[['american', 'Deep American voice'], ['british', 'Deep British voice']].map(([k, l]) => `<button class="btn ${k === cur ? 'primary' : ''}" data-v="${k}">${k === cur ? icon('check') : ''}${l}</button>`).join('')}</div>${b && b.status === 'narrating' ? '<p class="muted" style="font-size:13px;margin:10px 0 0">Your Mac already started narrating this book, so its saved chapters keep the first voice. Playback here switches right away.</p>' : ''}`, el => {
+    el.querySelectorAll('[data-v]').forEach(x => x.onclick = () => {
+      closeSheet(); const v = x.dataset.v; RD.v.voice = v;
+      if (b) { b.voice = v; b.at = Date.now(); kv.set('bookQueue', S.bookQueue); queueStatePush(); }
+      rdControls(); if (TTS.on) ttsFrom(Math.max(0, RD.idx));
+      toast(v === 'british' ? 'Deep British voice' : 'Deep American voice');
+    });
+  });
 }
 function rdChapters() {
   const t = rdT(RD.id), ch = rdList(t);
@@ -3664,7 +3678,7 @@ function bookTile([key, ch]) {
 }
 function queueTile(b) {
   return `<div class="bt"><div class="bt-art"><div class="bt-cover" data-action="read-queued" data-id="${esc(b.id)}" role="button">${b.cover ? `<div class="book-cover big"><img src="${b.cover}" alt=""></div>` : `<div class="book-cover big bt-blank"><span>${esc(b.name.replace(/\s*\(.*$/, ''))}</span></div>`}</div>${/\.epub$/i.test(b.file || '') ? `<button class="bt-badge bt-play" data-action="listen-queued" data-id="${esc(b.id)}" aria-label="Listen">${b.status === 'narrating' ? ring(pctOf(b.line), '#ff9f0a') : ''}${icon('play')}</button>` : `<span class="bt-badge">${ring(pctOf(b.line), '#ff9f0a')}</span>`}</div>
-    <div class="bt-t ellipsis">${esc(b.name.replace(/\s*\(.*$/, ''))}</div><div class="bt-s ellipsis">${b.voice === 'british' ? 'British voice' : 'American voice'} · Ready to play</div></div>`;
+    <div class="bt-t ellipsis">${esc(b.name.replace(/\s*\(.*$/, ''))}</div><div class="bt-s ellipsis">${b.voice === 'british' ? 'British voice' : 'American voice'} · ${b.status === 'narrating' ? `Mac narrating${pctOf(b.line) ? ' ' + pctOf(b.line) + '%' : ''}` : 'Ready to play'}</div></div>`;
 }
 VIEWS.books = () => {
   setTimeout(fillCovers, 300);
