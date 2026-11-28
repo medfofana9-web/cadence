@@ -274,7 +274,7 @@ function queueStatePush(now) {
   P.pushedAt = Date.now();
   pushT = setTimeout(() => {
     const { volume, ...settings } = S.settings;
-    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes, pod: { subs: S.pod.subs, prog: S.pod.prog }, eps: Object.keys(S.pod.prog).slice(-150).map(id => S.ext.get(id)).filter(Boolean).map(({ path, local, ...e }) => e), quran: S.quranSpot || null, quranSaved: S.quranSaved || [], want: (S.want || []).slice(0, 400), player: playerSnap() }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
+    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes, pod: { subs: S.pod.subs, prog: S.pod.prog }, eps: Object.keys(S.pod.prog).slice(-150).map(id => S.ext.get(id)).filter(Boolean).map(({ path, local, ...e }) => e), quran: S.quranSpot || null, quranSaved: S.quranSaved || [], want: (S.want || []).slice(0, 400), bookQueue: S.bookQueue || [], player: playerSnap() }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
   }, now ? 0 : 4000);
 }
 
@@ -295,7 +295,7 @@ async function boot() {
   S.quranSpot = await kv.get('quranSpot', null);
   S.quranSaved = await kv.get('quranSaved', []);
   CHECK.lists = await kv.get('playlistChecks', []);
-  S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
+  S.bookQueue = await kv.get('bookQueue', []); S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
   S.cleanNoArt = await kv.get('cleanNoArt', []); S.qOff = await kv.get('qOff', {}); S.offPaths = await kv.get('offPaths', {}); S.deskPaths = window.fofDesktop ? await kv.get('deskPaths', {}) : {};
   for (const [id, p] of pls) S.playlists.set(id, p);
   for (const [id, b] of arts) { if (id.startsWith('pl:')) S.plCovers.set(id.slice(3), URL.createObjectURL(b)); else S.art.set(id, b); }
@@ -443,6 +443,7 @@ function mergeState(d) {
     S.pod = { ...S.pod, subs, prog }; kv.set('pod', S.pod);
   }
   for (const e of d.eps || []) if (!S.ext.has(e.id)) S.ext.set(e.id, e);
+  if (d.bookQueue) { const m = new Map((S.bookQueue || []).map(b => [b.id, b])); for (const b of d.bookQueue) if (!m.has(b.id) || (b.at || 0) > (m.get(b.id).at || 0)) m.set(b.id, b); S.bookQueue = [...m.values()].filter(b => b.status !== 'done' || Date.now() - b.at < 3 * DAY).sort((a, b) => b.added - a.added); kv.set('bookQueue', S.bookQueue); if (DESK_BOOKS) setTimeout(takeBooks, 2000); if (S.route === 'books') render(); }
   if (d.want) { const m = new Map((S.want || []).map(w => [w.key + (w.arrived ? '+' : ''), w])); for (const w of d.want) { const k = w.key + (w.arrived ? '+' : ''); if (!m.has(k) && !(w.arrived ? false : (S.want || []).some(x => x.key === w.key && x.arrived))) m.set(k, w); } S.want = [...m.values()].sort((a, b) => b.at - a.at); kv.set('want', S.want); }
   if (d.quranSaved) { const m = new Map((S.quranSaved || []).map(x => [x.s + ':' + x.v, x])); for (const x of d.quranSaved) if (!m.has(x.s + ':' + x.v)) m.set(x.s + ':' + x.v, x); S.quranSaved = [...m.values()]; kv.set('quranSaved', S.quranSaved); }
   if (d.quran && (d.quran.at || 0) > (S.quranSpot?.at || 0)) { S.quranSpot = d.quran; kv.set('quranSpot', S.quranSpot); }
@@ -3171,6 +3172,7 @@ document.addEventListener('keydown', e => {
   if (e.key === '/') { e.preventDefault(); go('search'); }
 });
 $('#file-input').addEventListener('change', e => importFiles([...e.target.files]));
+$('#book-input').addEventListener('change', e => { const f = e.target.files[0]; if (f) sendBook(f); });
 $('#pl-file-input').addEventListener('change', e => importPlaylistFiles([...e.target.files]));
 $('#folder-input').addEventListener('change', e => importFiles([...e.target.files]));
 window.addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); document.body.classList.add('dragging-files'); } });
@@ -3315,13 +3317,60 @@ function bookCard([key, ch]) {
     <div class="bk-t ellipsis">${esc(ch[0].album || ch[0].title)}</div><div class="bk-s ellipsis">${esc(ch[0].artist)}</div>
     <div class="bk-foot">${sp?.finished ? 'Finished' : sp?.started ? `<span class="pod-bar"><i style="width:${st.pct}%"></i></span>${esc(leftTxt(st.left))} left` : esc(leftTxt(st.total))}</div></a>`;
 }
-const BOOK_HOW = `On your Mac, put the book’s EPUB or PDF in the <b>Fof Music Books</b> folder in Music. Fof Music reads it aloud chapter by chapter in the background, and it shows up here on all your devices. EPUB files sound best.`;
+/** Phone (or any device): the book goes to your private cloud storage; Fof Music on your Mac picks it up and narrates it. */
+function sendBook(f) {
+  if (!/\.(epub|pdf)$/i.test(f.name)) return toast('Pick an EPUB or PDF book');
+  const name = f.name.replace(/\.(epub|pdf)$/i, '').replace(/\s*\((?:z-lib|z-library|1lib)[^)]*\)\s*$/i, '').trim();
+  sheet(`<h2>Which voice should read it?</h2><p class="muted">${esc(name)}</p><div class="voice-pick"><button class="btn primary" data-v="american">Deep American voice</button><button class="btn" data-v="british">Deep British voice</button></div><div class="actions"><button class="btn ghost" data-close>Cancel</button></div>`, el => {
+    el.querySelectorAll('[data-v]').forEach(b => b.onclick = async () => {
+      closeSheet(); toast('Sending the book to your Mac…');
+      const id = 'bk' + Date.now().toString(36), ext = f.name.split('.').pop().toLowerCase(), path = `books/${id}.${ext}`;
+      try {
+        const store = await cloud.uploadFile(path, new Blob([f], { type: ext === 'pdf' ? 'application/pdf' : 'application/epub+zip' }));
+        S.bookQueue = [{ id, name, file: f.name, path, r2: store === 'r2', voice: b.dataset.v, status: 'waiting', added: Date.now(), at: Date.now() }, ...(S.bookQueue || [])];
+        kv.set('bookQueue', S.bookQueue); queueStatePush(); render();
+        toast('Sent. Your Mac narrates it next time Fof Music is open there.');
+      } catch (e) { toast('Couldn’t send the book. Try again in a moment.'); console.warn(e); }
+    });
+  });
+}
+function bookQueueHtml() {
+  const q = (S.bookQueue || []).filter(b => b.status !== 'done'); if (!q.length) return '';
+  return `<section class="section"><div class="section-head"><h2>Being narrated</h2></div><div class="book-queue">${q.map(b => `<div class="bq"><span class="bq-ic">${icon('book')}</span><span class="bq-main"><b class="ellipsis">${esc(b.name)}</b><span class="muted ellipsis">${esc(b.status === 'waiting' ? 'Waiting for your Mac' : b.status === 'failed' ? 'Your Mac couldn’t narrate this one' : b.line || 'Narrating on your Mac…')} · ${b.voice === 'british' ? 'British voice' : 'American voice'}</span></span></div>`).join('')}</div></section>`;
+}
+/** On the Mac: pick up books sent from other devices and hand them to the narrator. */
+const DESK_BOOKS = !!window.fofDesktop?.saveBook;
+let taking = false;
+async function takeBooks() {
+  if (!DESK_BOOKS || taking || !S.user) return; taking = true;
+  try {
+    for (const b of (S.bookQueue || []).filter(x => x.status === 'waiting')) {
+      const url = await cloud.fileUrl(b.path, b.r2); if (!url) continue;
+      const r = await fetch(url); if (!r.ok) continue;
+      await window.fofDesktop.saveBook(b.file || b.name + '.epub', b.voice, new Uint8Array(await r.arrayBuffer()));
+      Object.assign(b, { status: 'narrating', line: 'Starting on your Mac…', at: Date.now() });
+      kv.set('bookQueue', S.bookQueue); queueStatePush();
+    }
+  } catch (e) { console.warn('books', e); } finally { taking = false; }
+}
+if (DESK_BOOKS) {
+  setInterval(takeBooks, 2 * 60 * 1000); setTimeout(takeBooks, 20000);
+  window.fofDesktop.onNarrator?.(st => {
+    const b = (S.bookQueue || []).find(x => x.status === 'narrating' && st.file && (x.file || '') === st.file); if (!b) return;
+    const line = st.event === 'done' ? '' : st.line || '';
+    if (st.event === 'done') Object.assign(b, { status: 'done', at: Date.now() });
+    else if (st.event === 'failed') Object.assign(b, { status: 'failed', at: Date.now() });
+    else if (line && line !== b.line && Date.now() - (b.at || 0) > 60000) Object.assign(b, { line, at: Date.now() }); else return;
+    kv.set('bookQueue', S.bookQueue); queueStatePush(); if (S.route === 'books') render();
+  });
+}
+const BOOK_HOW = `Tap <b>Add a book</b> and pick an EPUB or PDF, on your iPhone or your Mac. Your Mac reads it aloud chapter by chapter in the background, and the chapters show up here on all your devices. EPUB files sound best.`;
 VIEWS.books = () => {
   const all = [...books()].map(([k, ch]) => [k, ch, bookSpot(k)]);
   const going = all.filter(x => x[2]?.started && !x[2].finished).sort((a, b) => b[2].at - a[2].at);
   const hero = going[0];
-  const add = window.fofDesktop?.addBook ? `<button class="btn" data-action="add-book">${icon('plus')}Add a book</button>` : '';
-  if (!all.length) return `<div class="page-head"><h1>Audiobooks</h1>${add}</div><div class="empty-state book-empty">${icon('book')}<h2>Your own audiobooks</h2><p>${BOOK_HOW}</p>${add}</div>`;
+  const add = `<button class="btn" data-action="add-book">${icon('plus')}Add a book</button>`;
+  if (!all.length) return `<div class="page-head"><h1>Audiobooks</h1></div>${bookQueueHtml()}<div class="empty-state book-empty">${icon('book')}<h2>Your own audiobooks</h2><p>${BOOK_HOW}</p>${add}</div>`;
   let heroHtml = '';
   if (hero) {
     const [k, ch, sp] = hero, st = bookStats(k), t = ch[sp.i];
@@ -3330,7 +3379,7 @@ VIEWS.books = () => {
       <div class="bh-now">${esc(t.title)}</div><div class="bh-bar"><span class="pod-bar"><i style="width:${st.pct}%"></i></span><span>${esc(leftTxt(st.left))} left</span></div>
       <button class="btn primary" data-action="book-play" data-book="${esc(k)}">${icon(current()?.id === t.id && !engine.el.paused ? 'pause' : 'play')}${current()?.id === t.id && !engine.el.paused ? 'Pause' : 'Resume'}</button></div></section>`;
   }
-  return `<div class="page-head"><h1>Audiobooks</h1>${add}</div>${heroHtml}
+  return `<div class="page-head"><h1>Audiobooks</h1>${add}</div>${heroHtml}${bookQueueHtml()}
     <section class="section"><div class="section-head"><h2>Your Books</h2></div><div class="book-grid">${all.map(([k, ch]) => bookCard([k, ch])).join('')}</div></section>
     <p class="muted book-how">${BOOK_HOW}</p>`;
 };
@@ -4725,7 +4774,11 @@ function driveMaps() {
 
 /* actions for the screens above */
 const ACT2 = {
-  'add-book': async () => { const r = await window.fofDesktop?.addBook?.(); if (r) toast(`Narrating ${r} on this Mac. Chapters show up here as they’re ready.`); },
+  'add-book': async () => {
+    if (window.fofDesktop?.addBook) { const r = await window.fofDesktop.addBook(); if (r) toast(`Narrating ${r} on this Mac. Chapters show up here as they’re ready.`); return; }
+    if (!S.user) return toast('Sign in first, so your Mac can pick up the book');
+    const i = $('#book-input'); i.value = ''; i.click();
+  },
   'grow-toggle': async a => { const p = S.playlists.get(a.dataset.pl); if (!p) return; p.auto = p.auto === false; await savePlaylist(p); render(); toast(p.auto ? 'This playlist will grow on its own' : 'Auto-add is off for this playlist'); if (p.auto) growPlaylists(true).catch(() => {}); },
   'grow-undo': a => growUndo(a.dataset.pl, [a.dataset.id]),
   'grow-undo-all': a => { const p = S.playlists.get(a.dataset.pl); const wk = Date.now() - 7 * DAY; return growUndo(a.dataset.pl, (p?.added || []).filter(x => x.at > wk).map(x => x.id)); },

@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('fofDesktop', {
   scanNow: () => ipcRenderer.send('scan-now'),
   /** pick an EPUB/PDF; the Mac narrates it into an audiobook */
   addBook: () => ipcRenderer.invoke('add-book'),
+  /** a book sent from your phone: saved into the Books folder for narration */
+  saveBook: (name, voice, bytes) => ipcRenderer.invoke('save-book', name, voice, bytes),
   narrator: () => ipcRenderer.invoke('narrator'),
   onNarrator: fn => ipcRenderer.on('narrator', (_e, s) => fn(s)),
 });

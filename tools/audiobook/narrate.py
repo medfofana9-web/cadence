@@ -37,6 +37,7 @@ def speakable(t):
     t = t.replace('—', ', ').replace('–', ', ').replace('…', '...')
     t = re.sub(r'\bMr\.', 'Mister', t); t = re.sub(r'\bMrs\.', 'Missus', t); t = re.sub(r'\bDr\.', 'Doctor', t)
     t = re.sub(r'\bSt\. ', 'Saint ', t)
+    t = re.sub(r'\b([Ff])\*ck', r'\1uck', t); t = re.sub(r'\b([Ss])h\*t', r'\1hit', t)
     t = re.sub(r'[\[\]{}*_#<>|~^]', '', t)
     return re.sub(r'\s+', ' ', t).strip()
 

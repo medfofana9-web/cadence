@@ -163,6 +163,7 @@ ipcMain.handle('read', async (_e, p) => {
 ipcMain.handle('exists', (_e, p) => folders().some(d => path.resolve(p).startsWith(path.resolve(d) + path.sep)) && fs.existsSync(p));
 ipcMain.handle('folders', () => folders());
 ipcMain.handle('add-book', () => narrator.addBook(win));
+ipcMain.handle('save-book', (_e, name, voice, bytes) => narrator.saveBook(name, voice, bytes));
 ipcMain.handle('narrator', () => narrator.status());
 ipcMain.handle('add-folder', () => addFolder());
 ipcMain.on('scan-now', () => scan(true));
@@ -180,7 +181,7 @@ app.whenReady().then(() => {
   if (hidden && app.dock) app.dock.hide();
   login();
   watchAll();
-  narrator.start((st, ev) => { buildMenu(); if (win) win.webContents.send('narrator', st); if (ev === 'chapter') { watchAll(); setTimeout(() => scan(true), 3000); } });
+  narrator.start((st, ev) => { buildMenu(); if (win) win.webContents.send('narrator', { ...st, event: ev || '' }); if (ev === 'chapter') { watchAll(); setTimeout(() => scan(true), 3000); } });
   setInterval(() => scan(), 60 * 1000);
   setInterval(() => { if (!fs.existsSync(folders()[0] || '/nonexistent')) return; if (!watchers.length) watchAll(); }, 5 * 60 * 1000);
 });

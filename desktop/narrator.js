@@ -17,7 +17,7 @@ const OUT = path.join(HOME, 'Music', 'Fof Music', 'Audiobooks');
 const BOOK = /\.(epub|pdf)$/i;
 const SITE = 'https://medfofana9-web.github.io/cadence/';
 const dir = () => path.join(app.getPath('userData'), 'narrator');
-const BASE = ['soundfile', 'mutagen', 'imageio-ffmpeg', 'beautifulsoup4', 'lxml', 'pymupdf'];
+const BASE = ['soundfile', 'mutagen', 'imageio-ffmpeg', 'beautifulsoup4', 'lxml', 'pymupdf', 'wordfreq'];
 const SPACY = 'en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl';
 const PKGS = engine => [...(engine === 'kokoro' ? ['kokoro>=0.9.4', 'misaki[en]>=0.9.4', SPACY] : ['chatterbox-tts==0.1.7']), ...BASE];
 /** The two narrators you picked: deep American (default) and deep British. */
@@ -74,7 +74,7 @@ async function nextBook() {
 async function run() {
   if (status.busy) return;
   const b = await nextBook(); if (!b) return;
-  set({ busy: true, book: b.n.replace(BOOK, ''), line: 'Getting ready…' });
+  set({ busy: true, file: b.n, book: b.n.replace(BOOK, ''), line: 'Getting ready…' });
   blocker = powerSaveBlocker.start('prevent-app-suspension');
   try {
     fs.mkdirSync(path.join(dir(), 'refs'), { recursive: true }); fs.mkdirSync(OUT, { recursive: true });
@@ -104,16 +104,17 @@ async function run() {
       fs.mkdirSync(DONE, { recursive: true });
       await fsp.rename(b.p, path.join(DONE, b.n)).catch(() => {}); await fsp.unlink(b.p + '.voice').catch(() => {});
       try { new Notification({ title: 'Audiobook ready', body: `${status.book} is in Fof Music.` }).show(); } catch {}
+      onChange(status, 'done');
       log(`done ${b.n}`);
     } else if (code !== null) {
-      log(`failed ${b.n} (exit ${code})`);
+      log(`failed ${b.n} (exit ${code})`); onChange(status, 'failed');
       try { new Notification({ title: 'Couldn’t finish the audiobook', body: `${status.book}: it will try again later.` }).show(); } catch {}
       await new Promise(r => setTimeout(r, 10 * 60 * 1000)); // don't retry in a tight loop
     }
   } catch (e) { log('error ' + (e.stack || e)); await new Promise(r => setTimeout(r, 10 * 60 * 1000)); }
   finally {
     if (blocker !== null) { try { powerSaveBlocker.stop(blocker); } catch {} blocker = null; }
-    set({ busy: false, line: '', book: '' });
+    set({ busy: false, line: '', book: '', file: '' });
     setTimeout(run, 3000);
   }
 }
@@ -130,6 +131,17 @@ async function addBook(win) {
   return r.filePaths.map(f => path.basename(f).replace(BOOK, '').replace(/\s*\(z-lib.*\)$/i, '')).join(', ');
 }
 
+async function saveBook(name, voice, bytes) {
+  name = path.basename(String(name || 'Book.epub')); if (!BOOK.test(name)) name += '.epub';
+  fs.mkdirSync(BOOKS, { recursive: true });
+  const dest = path.join(BOOKS, name);
+  if (fs.existsSync(path.join(DONE, name)) || fs.existsSync(dest)) return false; // already narrated or waiting
+  await fsp.writeFile(dest + '.voice', VOICES[voice] ? voice : 'american');
+  await fsp.writeFile(dest, Buffer.from(bytes));
+  setTimeout(run, 6000);
+  return true;
+}
+
 function start(cb) {
   onChange = cb || onChange;
   try { fs.mkdirSync(BOOKS, { recursive: true }); fs.mkdirSync(OUT, { recursive: true }); fs.mkdirSync(dir(), { recursive: true }); } catch {}
@@ -139,4 +151,4 @@ function start(cb) {
 }
 function stop() { if (child) try { child.kill(); } catch {} }
 
-module.exports = { start, stop, addBook, status: () => status, BOOKS, OUT, PKGS, VOICES };
+module.exports = { start, stop, addBook, saveBook, status: () => status, BOOKS, OUT, PKGS, VOICES };

@@ -1490,3 +1490,11 @@ body:not(.is-paused) .dr-play .when-paused{display:none}
   .book-head .bh-bar .pod-bar{flex:0 0 60%}
 }
 .ch-n .eq{display:inline-flex}
+.voice-pick{display:flex;flex-direction:column;gap:10px;margin:18px 0 6px}
+.voice-pick .btn{justify-content:center;height:48px;font-size:15px}
+.book-queue{display:flex;flex-direction:column;gap:8px}
+.bq{display:flex;align-items:center;gap:14px;padding:12px 14px;border-radius:14px;background:rgba(127,127,127,.08);border:1px solid var(--line)}
+.bq-ic{flex:0 0 38px;height:38px;border-radius:10px;display:grid;place-items:center;background:rgba(var(--tint),.14);color:var(--accent)}
+.bq-ic svg{width:20px;height:20px}
+.bq-main{display:flex;flex-direction:column;min-width:0;gap:2px}
+.bq-main b{font-size:14.5px}.bq-main span{font-size:12.5px}
