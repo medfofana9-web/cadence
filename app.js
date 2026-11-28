@@ -3442,6 +3442,42 @@ async function epubChapters(buf) {
   }
   return out;
 }
+/* Device voice for books still waiting to be narrated: reads sentence by sentence and lights each one up. */
+const TTS = { on: false, n: 0 };
+function ttsVoice() {
+  const vs = speechSynthesis.getVoices().filter(v => /^en[-_]/i.test(v.lang));
+  const pref = [/Evan.*(Enhanced|Premium)/i, /Nathan.*(Enhanced|Premium)/i, /Aaron/i, /Reed.*(Enhanced|Premium)/i, /Tom.*(Enhanced|Premium)/i, /(Enhanced|Premium)/i, /Daniel/i, /Alex/i, /Google UK English Male/i, /Google US English/i];
+  for (const r of pref) { const v = vs.find(x => r.test(x.name)); if (v) return v; }
+  return vs[0] || null;
+}
+function ttsStop() { TTS.on = false; TTS.n++; try { speechSynthesis.cancel(); } catch {} if (RD.id) rdControls(); }
+function ttsFrom(i) {
+  if (!('speechSynthesis' in window)) return toast('This browser can’t read aloud');
+  const t = rdT(RD.id), s = rdText(t); if (!s) return;
+  try { speechSynthesis.cancel(); } catch {}
+  const my = ++TTS.n; TTS.on = true; RD.userScrolled = 0;
+  const say = k => {
+    if (my !== TTS.n || !TTS.on) return;
+    if (k >= s.length) { const ch = rdList(t), n = ch.findIndex(c => c.id === t.id); if (ch[n + 1]) { RD.id = ch[n + 1].id; paintReader(); setTimeout(() => ttsFrom(0), 400); } else ttsStop(); return; }
+    rdFollow(0, false, k);
+    const u = new SpeechSynthesisUtterance(s[k][1].replace(/—/g, ', ')); const v = ttsVoice(); if (v) { u.voice = v; u.lang = v.lang; }
+    u.rate = Math.min(2, (S.settings.bookSpeed || 1) * .96); u.pitch = .92;
+    u.onend = () => setTimeout(() => say(k + 1), s[k][2] ? 380 : 60);
+    u.onerror = e => { if (e.error !== 'interrupted' && e.error !== 'canceled') ttsStop(); };
+    speechSynthesis.speak(u);
+  };
+  say(i); rdControls();
+}
+if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => {};
+/** Books added before covers were read from the file: fetch the cover once from the book itself. */
+const coverTried = new Set();
+async function fillCovers() {
+  if (!S.user) return;
+  for (const b of (S.bookQueue || []).filter(x => !x.cover && x.status !== 'done' && /\.epub$/i.test(x.file || '') && !coverTried.has(x.id))) {
+    coverTried.add(b.id);
+    try { const url = await cloud.fileUrl(b.path, b.r2); if (!url) continue; const info = await epubInfo(new Blob([await (await fetch(url)).arrayBuffer()])); if (info.cover) { b.cover = info.cover; b.at = Date.now(); kv.set('bookQueue', S.bookQueue); queueStatePush(); if (S.route === 'books') render(); } } catch (e) { console.warn('cover', e); }
+  }
+}
 async function readQueued(id, buf) {
   const b = (S.bookQueue || []).find(x => x.id === id); if (!b) return;
   if (!/\.epub$/i.test(b.file || '')) return toast('Reading before narration works for EPUB books');
@@ -3463,7 +3499,7 @@ function openReader(id) {
   history.pushState({ reader: true }, '');
   paintReader();
 }
-function closeReader() { const el = $('#reader'); if (el.hidden) return; RD.v = null; el.classList.remove('open'); document.body.classList.remove('reading'); setTimeout(() => { el.hidden = true; $('#rd-body').innerHTML = ''; }, 320); RD.id = null; }
+function closeReader() { const el = $('#reader'); if (el.hidden) return; ttsStop(); RD.v = null; el.classList.remove('open'); document.body.classList.remove('reading'); setTimeout(() => { el.hidden = true; $('#rd-body').innerHTML = ''; }, 320); RD.id = null; }
 window.addEventListener('popstate', () => { if (RD.id) closeReader(); });
 function rdSpot(t) { // where to start reading: the playing position, else your saved place in this chapter
   if (RD.v?.map.has(t.id)) return 0;
@@ -3499,9 +3535,9 @@ function rdPaginate() {
 function rdPageLabel() { const b = $('#rd-body'); const i = Math.round(b.scrollLeft / Math.max(1, b.clientWidth)); RD.page = i; $('#rd-pos').textContent = RD.mode === 'page' ? `${i + 1} of ${RD.pages || 1}` : ''; }
 function rdTurn(dir) { const b = $('#rd-body'); RD.userScrolled = Date.now(); const to = Math.max(0, Math.min((RD.pages || 1) - 1, Math.round(b.scrollLeft / b.clientWidth) + dir)); b.scrollTo({ left: to * b.clientWidth, behavior: 'smooth' }); }
 /** Lights up the sentence being spoken and keeps it in view (or turns to its page). */
-function rdFollow(sec, jump = false) {
-  const t = rdT(RD.id); if (!t || !rdText(t) || RD.v?.map.has(t.id)) return;
-  const i = rdIndexAt(t, sec); if (i === RD.idx && !jump) return;
+function rdFollow(sec, jump = false, at = null) {
+  const t = rdT(RD.id); if (!t || !rdText(t) || (RD.v?.map.has(t.id) && at === null)) return;
+  const i = at !== null ? at : rdIndexAt(t, sec); if (i === RD.idx && !jump) return;
   const body = $('#rd-body'), old = body.querySelector('.rd-s.cur'); if (old) old.classList.remove('cur');
   body.querySelectorAll('.rd-s.past').forEach(x => { if (+x.dataset.i >= i) x.classList.remove('past'); });
   const cur = body.querySelector(`.rd-s[data-i="${i}"]`); if (!cur) return;
@@ -3515,7 +3551,7 @@ function rdFollow(sec, jump = false) {
 }
 function rdControls() {
   const t = rdT(RD.id); if (!t) return;
-  if (RD.v?.map.has(t.id)) { $('#rd-left').textContent = 'Listening starts once your Mac narrates it'; return; }
+  if (RD.v?.map.has(t.id)) { $('#rd-play use').setAttribute('href', TTS.on ? '#i-pause' : '#i-play'); $('#rd-speed').textContent = (S.settings.bookSpeed || 1) + '×'; $('#rd-left').textContent = 'Device voice until your Mac finishes narrating'; return; }
   const playing = current()?.id === t.id && !engine.el.paused;
   $('#rd-play use').setAttribute('href', playing ? '#i-pause' : '#i-play');
   $('#rd-speed').textContent = (isBook(current()) ? P.speed || 1 : rdPrefs().speed || S.settings.bookSpeed || 1) + '×';
@@ -3551,9 +3587,10 @@ function bindReader() {
     const a = e.target.closest('[data-rd]'); if (a) { e.stopPropagation(); const k = a.dataset.rd;
       if (k === 'close') { history.back(); return; }
       if (k === 'mode') { RD.mode = a.dataset.mode; rdSave({ mode: RD.mode }); paintReader(); return; }
-      if (k === 'play') return rdPlayAt(current()?.id === RD.id ? -1 : RD.idx);
+      if (k === 'play') { if (RD.v?.map.has(RD.id)) return TTS.on ? ttsStop() : ttsFrom(Math.max(0, RD.idx)); return rdPlayAt(current()?.id === RD.id ? -1 : RD.idx); }
       if (k === 'back') { if (current()?.id === RD.id) engine.el.currentTime = Math.max(0, engine.el.currentTime - 15); return; }
       if (k === 'fwd') { if (current()?.id === RD.id) engine.el.currentTime += 30; return; }
+      if (k === 'speed' && RD.v?.map.has(RD.id)) { S.settings.bookSpeed = SPEEDS[(SPEEDS.indexOf(S.settings.bookSpeed || 1) + 1) % SPEEDS.length]; saveSettings(); if (TTS.on) ttsFrom(RD.idx); rdControls(); return; }
       if (k === 'speed') { if (isBook(current())) cycleSpeed(); else { const v = SPEEDS[(SPEEDS.indexOf(S.settings.bookSpeed || 1) + 1) % SPEEDS.length]; S.settings.bookSpeed = v; saveSettings(); } rdControls(); return; }
       if (k === 'chapters') return rdChapters();
       if (k === 'aa') return rdLook();
@@ -3565,7 +3602,8 @@ function bindReader() {
       const x = e.clientX / window.innerWidth;
       if (x < .22) return rdTurn(-1); if (x > .78) return rdTurn(1);
     }
-    if (sp && !RD.v?.map.has(RD.id)) { haptic(); rdPlayAt(+sp.dataset.i); }
+    if (sp && RD.v?.map.has(RD.id)) { haptic(); ttsFrom(+sp.dataset.i); }
+    else if (sp) { haptic(); rdPlayAt(+sp.dataset.i); }
   });
   const mark = () => { RD.userScrolled = Date.now(); };
   body.addEventListener('touchstart', mark, { passive: true }); body.addEventListener('wheel', mark, { passive: true });
@@ -3612,6 +3650,7 @@ function queueTile(b) {
     <div class="bt-t ellipsis">${esc(b.name.replace(/\s*\(.*$/, ''))}</div><div class="bt-s ellipsis">${/\.epub$/i.test(b.file || '') ? 'Tap to read · ' : ''}${b.status === 'waiting' ? 'Waiting for your Mac' : b.status === 'failed' ? 'Couldn’t narrate this one' : 'Narrating on your Mac'}</div></div>`;
 }
 VIEWS.books = () => {
+  setTimeout(fillCovers, 300);
   const all = [...books()].map(([k, ch]) => [k, ch, bookSpot(k)]);
   const pending = (S.bookQueue || []).filter(b => b.status !== 'done' && !all.some(([, ch]) => narratingFor(ch[0].album) === b));
   const add = `<button class="pill-btn bk-add" data-action="add-book">${icon('plus')}Add a book</button>`;

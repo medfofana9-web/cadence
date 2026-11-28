@@ -1647,9 +1647,8 @@ body:not(.is-paused) .dr-play .when-paused{display:none}
   .bk-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:24px 16px}
   .bk-hero-row{gap:16px}.bk-hero-row>a{flex-basis:118px}
 }
-.rd-textonly .rd-bar,.rd-textonly [data-rd=back],.rd-textonly [data-rd=fwd],.rd-textonly [data-rd=play],.rd-textonly [data-rd=speed]{display:none}
-.rd-textonly .rd-ctl{display:flex;justify-content:flex-end;margin-top:-26px}
-.rd-textonly .rd-meta{margin-top:0;min-height:44px;align-items:center;padding-right:56px}
+.rd-textonly .rd-bar,.rd-textonly [data-rd=back],.rd-textonly [data-rd=fwd]{visibility:hidden}
+.rd-textonly .rd-bar{display:none}
 .bt-cover[role=button]{cursor:pointer}
 
 .reader[data-mode=page]{--pad:24px}
