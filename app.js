@@ -4602,15 +4602,19 @@ window.__fof = { growPlaylists, cleanupScan, runCleanup, undoCleanup, S, P };
 const DESK = window.fofDesktop || null;
 if (DESK) {
   document.documentElement.classList.add('desktop-app');
-  let busy = false;
-  DESK.onFiles(async list => {
-    if (busy) return;
+  let busy = false, pending = null;
+  const waitIdle = async () => { for (let i = 0; i < 600 && IMP.running; i++) await new Promise(r => setTimeout(r, 1000)); return !IMP.running; };
+  async function deskImport(list) {
+    // a list that arrives mid-import is kept and handled right after, never dropped
+    if (busy) { pending = list; return; }
     busy = true;
     try {
       // wait until the library has loaded and any import in progress has finished
       for (let i = 0; i < 120 && (IMP.running || !S.tracks.size && !S.bootDone); i++) await new Promise(r => setTimeout(r, 1000));
       // your library has to arrive from the cloud first, so nothing already in it is added twice
-      if (cloud.cloudConfigured() && (!S.user || !S.lastSync)) return;
+      if (cloud.cloudConfigured() && (!S.user || !S.lastSync)) { setTimeout(() => DESK.scanNow(), 30000); return; }
+      // one time: earlier versions could mark songs as done without adding them, so look at everything again
+      if (!(await kv.get('deskSeenReset2', false))) { await kv.set('deskSeen', []); await kv.set('deskSeenReset2', true); }
       const seen = new Set(await kv.get('deskSeen', []));
       const byFile = new Map([...S.tracks.values()].map(t => [`${t.file || t.original?.file || ''}|${t.size || 0}`, t]));
       const have = new Set(byFile.keys());
@@ -4619,18 +4623,29 @@ if (DESK) {
       S.deskPaths = paths; kv.set('deskPaths', paths);
       const key = f => `${f.name}|${f.size}|${f.mtime}`;
       const fresh = list.filter(f => !seen.has(key(f)) && !have.has(`${f.name}|${f.size}`));
-      if (fresh.length) {
-        for (let i = 0; i < fresh.length; i += 100) {
-          const part = fresh.slice(i, i + 100);
-          const files = (await Promise.all(part.map(f => DESK.read(f.path).then(b => new File([b], f.name, { lastModified: f.mtime, type: '' })).catch(() => null)))).filter(Boolean);
-          if (files.length) await importFiles(files, { background: true });
-          await kv.set('deskSeen', [...new Set([...seen, ...part.map(key)])].slice(-30000)); part.forEach(f => seen.add(key(f)));
-        }
-        setTimeout(autoUpload, 3000);
+      const failed = new Set();
+      for (let i = 0; i < fresh.length; i += 100) {
+        const part = fresh.slice(i, i + 100);
+        const read = await Promise.all(part.map(f => DESK.read(f.path).then(b => new File([b], f.name, { lastModified: f.mtime, type: '' })).catch(() => null)));
+        part.forEach((f, k) => { if (!read[k]) failed.add(key(f)); });
+        const files = read.filter(Boolean);
+        // only count a batch as done once it has really gone through the importer
+        if (!(await waitIdle())) { part.forEach(f => failed.add(key(f))); continue; }
+        if (files.length) await importFiles(files, { background: true });
+        for (const f of part) if (!failed.has(key(f))) seen.add(key(f));
+        await kv.set('deskSeen', [...seen].slice(-30000));
       }
-      await kv.set('deskSeen', [...new Set([...seen, ...list.map(key)])].slice(-30000));
-    } catch (e) { console.warn('mac import', e); } finally { busy = false; }
-  });
+      if (fresh.length) setTimeout(autoUpload, 3000);
+      for (const f of list) if (!failed.has(key(f))) seen.add(key(f));
+      await kv.set('deskSeen', [...seen].slice(-30000));
+      // anything that couldn't be read (still syncing, locked) gets another try in a couple of minutes
+      if (failed.size) setTimeout(() => DESK.scanNow(), 120000);
+    } catch (e) { console.warn('mac import', e); } finally {
+      busy = false;
+      if (pending) { const l = pending; pending = null; deskImport(l); }
+    }
+  }
+  DESK.onFiles(deskImport);
   DESK.onControl(a => { if (a === 'toggle') toggle(); else if (a === 'next') next(); else if (a === 'prev') prev(); else if (a === 'flow') flow(); });
   const tell2 = () => { const t = current(); DESK.state({ title: t?.title || '', artist: t?.artist || '', playing: !engine.el.paused }); };
   engine.el.addEventListener('play', tell2); engine.el.addEventListener('pause', tell2); engine.el.addEventListener('loadedmetadata', tell2);
