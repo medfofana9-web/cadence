@@ -17,7 +17,7 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq espeak-ng ffmpeg
       - run: |
           pip install -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install -q chatterbox-tts kokoro soundfile
+          pip install -q chatterbox-tts kokoro soundfile faster-whisper
       - run: python tools/audiobook/samples.py samples
       - uses: actions/upload-artifact@v4
         with: { name: voice-samples, path: samples }
