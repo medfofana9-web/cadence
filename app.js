@@ -2909,6 +2909,7 @@ document.addEventListener('click', async e => {
       case 'skip-back': { const el = engine.el; el.currentTime = Math.max(0, el.currentTime - 15); return; }
       case 'skip-fwd': { const el = engine.el; el.currentTime = Math.min((el.duration || 1e9) - 1, el.currentTime + 30); return; }
       case 'book-restart': return bookRestart(a.dataset.book);
+      case 'read-queued': return readQueued(id);
       case 'book-filter': S.bookFilter = a.dataset.f; return render();
       case 'book-read': { const ch = bookChapters(a.dataset.book); const c = ch.find(x => x.id === current()?.id) || ch[bookSpot(a.dataset.book).i]; return c && openReader(c.id); }
       case 'read-now': return current() && openReader(current().id);
@@ -3323,6 +3324,25 @@ function bookCard([key, ch]) {
     <div class="bk-t ellipsis">${esc(ch[0].album || ch[0].title)}</div><div class="bk-s ellipsis">${esc(ch[0].artist)}</div>
     <div class="bk-foot">${sp?.finished ? 'Finished' : sp?.started ? `<span class="pod-bar"><i style="width:${st.pct}%"></i></span>${esc(leftTxt(st.left))} left` : esc(leftTxt(st.total))}</div></a>`;
 }
+/** Reads an EPUB's cover, title and author in the browser, so a book shows its real cover while it waits to be narrated. */
+async function epubInfo(file) {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer()), view = new DataView(bytes.buffer), dec = new TextDecoder();
+    let end = bytes.length - 22; while (end >= Math.max(0, bytes.length - 65557) && view.getUint32(end, true) !== 0x06054b50) end--; if (end < 0) return {};
+    const files = new Map(); let pos = view.getUint32(end + 16, true);
+    for (let i = 0; i < view.getUint16(end + 10, true); i++) { const nl = view.getUint16(pos + 28, true); files.set(dec.decode(bytes.subarray(pos + 46, pos + 46 + nl)), { m: view.getUint16(pos + 10, true), size: view.getUint32(pos + 20, true), off: view.getUint32(pos + 42, true) }); pos += 46 + nl + view.getUint16(pos + 30, true) + view.getUint16(pos + 32, true); }
+    const read = async name => { const f = files.get(name); if (!f) return null; const st = f.off + 30 + view.getUint16(f.off + 26, true) + view.getUint16(f.off + 28, true); const d = bytes.subarray(st, st + f.size); return f.m === 8 ? new Uint8Array(await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer()) : d; };
+    const xml = async n => { const b = await read(n); return b && new DOMParser().parseFromString(dec.decode(b), 'application/xml'); };
+    const opfPath = (await xml('META-INF/container.xml'))?.querySelector('rootfile')?.getAttribute('full-path'); if (!opfPath) return {};
+    const opf = await xml(opfPath), base = opfPath.includes('/') ? opfPath.replace(/[^/]+$/, '') : '';
+    const title = opf.getElementsByTagName('dc:title')[0]?.textContent?.trim(), author = opf.getElementsByTagName('dc:creator')[0]?.textContent?.trim();
+    const items = [...opf.getElementsByTagName('item')], metaCover = [...opf.getElementsByTagName('meta')].find(m => m.getAttribute('name') === 'cover')?.getAttribute('content');
+    const it = items.find(i => i.getAttribute('id') === metaCover) || items.find(i => /cover-image/.test(i.getAttribute('properties') || '')) || items.find(i => /image/.test(i.getAttribute('media-type') || '') && /cover/i.test(i.getAttribute('href') || ''));
+    let cover = null;
+    if (it) { const raw = await read(decodeURIComponent(base + it.getAttribute('href')).replace(/[^/]+\/\.\.\//g, '')); if (raw) { const bmp = await createImageBitmap(new Blob([raw])); const h = 420, w = Math.round(bmp.width / bmp.height * h); const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(bmp, 0, 0, w, h); cover = c.toDataURL('image/jpeg', .8); } }
+    return { title, author, cover };
+  } catch (e) { console.warn('epub', e); return {}; }
+}
 /** Phone (or any device): the book goes to your private cloud storage; Fof Music on your Mac picks it up and narrates it. */
 function sendBook(f) {
   if (!/\.(epub|pdf)$/i.test(f.name)) return toast('Pick an EPUB or PDF book');
@@ -3333,7 +3353,8 @@ function sendBook(f) {
       const id = 'bk' + Date.now().toString(36), ext = f.name.split('.').pop().toLowerCase(), path = `books/${id}.${ext}`;
       try {
         const store = await cloud.uploadFile(path, new Blob([f], { type: ext === 'pdf' ? 'application/pdf' : 'application/epub+zip' }));
-        S.bookQueue = [{ id, name, file: f.name, path, r2: store === 'r2', voice: b.dataset.v, status: 'waiting', added: Date.now(), at: Date.now() }, ...(S.bookQueue || [])];
+        const info = /\.epub$/i.test(f.name) ? await epubInfo(f) : {};
+        S.bookQueue = [{ id, name: info.title ? `${info.title}${info.author ? ` (${info.author})` : ''}` : name, file: f.name, path, r2: store === 'r2', voice: b.dataset.v, cover: info.cover || null, status: 'waiting', added: Date.now(), at: Date.now() }, ...(S.bookQueue || [])];
         kv.set('bookQueue', S.bookQueue); queueStatePush(); render();
         toast('Sent. Your Mac narrates it next time Fof Music is open there.');
       } catch (e) { toast('Couldn’t send the book. Try again in a moment.'); console.warn(e); }
@@ -3353,7 +3374,9 @@ async function takeBooks() {
     for (const b of (S.bookQueue || []).filter(x => x.status === 'waiting')) {
       const url = await cloud.fileUrl(b.path, b.r2); if (!url) continue;
       const r = await fetch(url); if (!r.ok) continue;
-      await window.fofDesktop.saveBook(b.file || b.name + '.epub', b.voice, new Uint8Array(await r.arrayBuffer()));
+      const buf = await r.arrayBuffer();
+      if (!b.cover && /\.epub$/i.test(b.file || '')) b.cover = (await epubInfo(new Blob([buf]))).cover || null;
+      await window.fofDesktop.saveBook(b.file || b.name + '.epub', b.voice, new Uint8Array(buf));
       Object.assign(b, { status: 'narrating', line: 'Starting on your Mac…', at: Date.now() });
       kv.set('bookQueue', S.bookQueue); queueStatePush();
     }
@@ -3371,30 +3394,86 @@ if (DESK_BOOKS) {
   });
 }
 /* ---------- Reader: Read along (sentence lights up as it's spoken) and Page (paper, like Apple Books) ---------- */
-const RD = { id: null, mode: 'along', idx: -1, page: 0 };
+const RD = { id: null, mode: 'along', idx: -1, page: 0, v: null };
+const rdT = id => RD.v?.map.get(id) || T(id);
+const rdList = t => RD.v?.map.has(t?.id) ? RD.v.list : bookChapters(bookKey(t));
 const rdPrefs = () => ({ mode: 'along', theme: 'paper', size: 19, ...(S.settings.reader || {}) });
 function rdSave(p) { S.settings.reader = { ...rdPrefs(), ...p }; saveSettings(); }
 const rdText = t => t?.read?.s || null;
 function rdIndexAt(t, sec) { const s = rdText(t); if (!s) return -1; const ms = sec * 1000 + 120; let lo = 0, hi = s.length - 1, r = 0; while (lo <= hi) { const m = (lo + hi) >> 1; if (s[m][0] <= ms) { r = m; lo = m + 1; } else hi = m - 1; } return r; }
 /** Opens the reader on a chapter: the one playing, else where you left off in that book. */
+/** Read a book that hasn't been narrated yet, straight from its EPUB. */
+async function epubChapters(buf) {
+  const bytes = new Uint8Array(buf), view = new DataView(bytes.buffer), dec = new TextDecoder();
+  let end = bytes.length - 22; while (end >= Math.max(0, bytes.length - 65557) && view.getUint32(end, true) !== 0x06054b50) end--;
+  const files = new Map(); let pos = view.getUint32(end + 16, true);
+  for (let i = 0; i < view.getUint16(end + 10, true); i++) { const nl = view.getUint16(pos + 28, true); files.set(dec.decode(bytes.subarray(pos + 46, pos + 46 + nl)), { m: view.getUint16(pos + 10, true), size: view.getUint32(pos + 20, true), off: view.getUint32(pos + 42, true) }); pos += 46 + nl + view.getUint16(pos + 30, true) + view.getUint16(pos + 32, true); }
+  const read = async name => { const f = files.get(name); if (!f) return null; const st = f.off + 30 + view.getUint16(f.off + 26, true) + view.getUint16(f.off + 28, true); const d = bytes.subarray(st, st + f.size); return dec.decode(f.m === 8 ? new Uint8Array(await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer()) : d); };
+  const norm = p => { const out = []; for (const x of p.split('/')) { if (x === '..') out.pop(); else if (x && x !== '.') out.push(x); } return out.join('/'); };
+  const opfPath = new DOMParser().parseFromString(await read('META-INF/container.xml'), 'application/xml').querySelector('rootfile').getAttribute('full-path');
+  const opf = new DOMParser().parseFromString(await read(opfPath), 'application/xml'), base = opfPath.includes('/') ? opfPath.replace(/[^/]+$/, '') : '';
+  const items = new Map([...opf.getElementsByTagName('item')].map(i => [i.getAttribute('id'), i.getAttribute('href')]));
+  const tocT = new Map();
+  try {
+    const ncxHref = [...opf.getElementsByTagName('item')].find(i => /dtbncx/.test(i.getAttribute('media-type') || ''))?.getAttribute('href');
+    if (ncxHref) { const nx = new DOMParser().parseFromString(await read(norm(base + ncxHref)), 'application/xml'), nb = norm(base + ncxHref).replace(/[^/]+$/, '');
+      for (const np of nx.querySelectorAll('navMap > navPoint')) { const src = np.querySelector('content')?.getAttribute('src')?.split('#')[0]; const tt = np.querySelector('navLabel text')?.textContent.trim(); if (src && tt && !tocT.has(norm(nb + decodeURIComponent(src)))) tocT.set(norm(nb + decodeURIComponent(src)), tt); } }
+  } catch {}
+  const skip = /^(international acclaim|contents|table of contents|copyright|about the (author|publisher)|also by|dedication|acknowledg|praise|a preview|index|notes|bibliography|selected bibliography)/i;
+  const groups = [];
+  for (const ref of opf.getElementsByTagName('itemref')) {
+    const href = items.get(ref.getAttribute('idref')); if (!href) continue;
+    const path = norm(base + decodeURIComponent(href)), html = await read(path); if (!html) continue;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const paras = [...doc.body.querySelectorAll('p,h1,h2,h3,h4,li,blockquote,div')].filter(e => !e.querySelector('p,li,div,h1,h2,h3,h4,blockquote')).map(e => e.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const head = tocT.get(path) || (tocT.size ? null : doc.querySelector('h1,h2,h3')?.textContent.replace(/\s+/g, ' ').trim() || '');
+    if (head !== null || !groups.length) groups.push({ head: head || '', paras: [] });
+    groups[groups.length - 1].paras.push(...paras);
+  }
+  const out = [], bookTitle = (opf.getElementsByTagName('dc:title')[0]?.textContent || '').trim().toLowerCase();
+  for (let { head, paras } of groups) {
+    const bt2 = bookTitle.replace(/^the /, ''); paras = paras.filter(p => { const l = p.toLowerCase(); return l !== bookTitle && l !== bt2 && l !== head.toLowerCase(); });
+    while (paras[0] && paras[0].split(' ').length <= 8 && head.toLowerCase().includes(paras[0].toLowerCase().replace(/[.:]$/, ''))) paras.shift();
+    if (paras.join(' ').split(' ').length < 60 || skip.test(head)) continue;
+    if (/^(law|chapter|part|rule) \d+$/i.test(head) && paras[0] && paras[0].split(' ').length <= 14 && !/[.!?]$/.test(paras[0])) { let name = paras.shift(); while (paras[0] && paras[0].split(' ').length <= 8 && !/[.!?]$/.test(paras[0]) && name.split(' ').length < 18 && !/^(judgment|transgression|observance|interpretation|keys to power|reversal|image|authority)/i.test(paras[0])) name += ' ' + paras.shift(); head = `${head}: ${name}`; }
+    const s = []; for (const p of paras) { if (p === head) continue; const sents = p.split(/(?<=[.!?…”"])\s+(?=[A-Z“"‘(])/); sents.forEach((x, k) => s.push([0, x, k === sents.length - 1 ? 1 : 0])); }
+    const tc = x => x.toLowerCase().replace(/(^|[\s(“"-])(\w)/g, (m, a, c) => a + c.toUpperCase()).replace(/\b(Of|The|A|An|And|In|On|To|For|Or|With|At|By)\b/g, (w, _, i, str) => i && str[i - 2] !== ':' ? w.toLowerCase() : w);
+    out.push({ title: head.length > 2 && head.length < 120 ? (/[a-z]/.test(head.replace(/^(law|chapter|part)/i, '').split(':')[1] || head) && head !== head.toUpperCase() ? (head.includes(':') ? head.split(':')[0].replace(/^LAW/, 'Law') + ': ' + tc(head.split(':').slice(1).join(':').trim()) : head) : tc(head)) : `Part ${out.length + 1}`, read: { v: 1, s } });
+  }
+  return out;
+}
+async function readQueued(id, buf) {
+  const b = (S.bookQueue || []).find(x => x.id === id); if (!b) return;
+  if (!/\.epub$/i.test(b.file || '')) return toast('Reading before narration works for EPUB books');
+  toast('Opening the book…');
+  try {
+    if (!buf) { const url = await cloud.fileUrl(b.path, b.r2); if (!url) throw Error('no link'); buf = await (await fetch(url)).arrayBuffer(); }
+    const chs = await epubChapters(buf);
+    if (!chs.length) return toast('Couldn’t find the text in this book');
+    const title = b.name.replace(/\s*\(.*$/, ''), list = chs.map((c, i) => ({ id: `${b.id}:${i}`, title: c.title, album: title, artist: '', read: c.read, art: b.cover }));
+    RD.v = { map: new Map(list.map(c => [c.id, c])), list };
+    openReader(list[0].id);
+  } catch (e) { console.warn(e); toast('Couldn’t open the book right now. Try again in a moment.'); }
+}
 function openReader(id) {
-  const t = T(id); if (!t) return;
-  const p = rdPrefs(); RD.id = id; RD.mode = p.mode; RD.idx = -1; RD.page = -1;
+  const t = rdT(id); if (!t) return;
+  const p = rdPrefs(); RD.id = id; RD.mode = RD.v?.map.has(id) ? 'page' : p.mode; RD.idx = -1; RD.page = -1;
   const el = $('#reader'); el.hidden = false; requestAnimationFrame(() => el.classList.add('open'));
   document.body.classList.add('reading');
   history.pushState({ reader: true }, '');
   paintReader();
 }
-function closeReader() { const el = $('#reader'); if (el.hidden) return; el.classList.remove('open'); document.body.classList.remove('reading'); setTimeout(() => { el.hidden = true; $('#rd-body').innerHTML = ''; }, 320); RD.id = null; }
+function closeReader() { const el = $('#reader'); if (el.hidden) return; RD.v = null; el.classList.remove('open'); document.body.classList.remove('reading'); setTimeout(() => { el.hidden = true; $('#rd-body').innerHTML = ''; }, 320); RD.id = null; }
 window.addEventListener('popstate', () => { if (RD.id) closeReader(); });
 function rdSpot(t) { // where to start reading: the playing position, else your saved place in this chapter
+  if (RD.v?.map.has(t.id)) return 0;
   if (current()?.id === t.id) return engine.el.currentTime || 0;
   const p = S.pod.prog[t.id]; return p && !p.done ? p.t : 0;
 }
 function paintReader() {
-  const t = T(RD.id); if (!t) return;
-  const p = rdPrefs(), el = $('#reader'), s = rdText(t), ch = bookChapters(bookKey(t)), n = ch.findIndex(c => c.id === t.id);
-  el.dataset.mode = RD.mode; el.dataset.theme = p.theme; el.style.setProperty('--rd-size', p.size + 'px');
+  const t = rdT(RD.id); if (!t) return;
+  const p = rdPrefs(), el = $('#reader'), s = rdText(t), ch = rdList(t), n = ch.findIndex(c => c.id === t.id);
+  el.classList.toggle('rd-textonly', !!RD.v?.map.has(t.id)); el.dataset.mode = RD.mode; el.dataset.theme = p.theme; el.style.setProperty('--rd-size', p.size + 'px');
   el.style.cssText += ';' + ambient(t.colors || colorsOf(ch));
   $('#rd-book').textContent = t.album || ''; $('#rd-ch').textContent = t.title;
   $$('#reader .seg button').forEach(b => b.classList.toggle('on', b.dataset.mode === RD.mode));
@@ -3421,7 +3500,7 @@ function rdPageLabel() { const b = $('#rd-body'); const i = Math.round(b.scrollL
 function rdTurn(dir) { const b = $('#rd-body'); RD.userScrolled = Date.now(); const to = Math.max(0, Math.min((RD.pages || 1) - 1, Math.round(b.scrollLeft / b.clientWidth) + dir)); b.scrollTo({ left: to * b.clientWidth, behavior: 'smooth' }); }
 /** Lights up the sentence being spoken and keeps it in view (or turns to its page). */
 function rdFollow(sec, jump = false) {
-  const t = T(RD.id); if (!t || !rdText(t)) return;
+  const t = rdT(RD.id); if (!t || !rdText(t) || RD.v?.map.has(t.id)) return;
   const i = rdIndexAt(t, sec); if (i === RD.idx && !jump) return;
   const body = $('#rd-body'), old = body.querySelector('.rd-s.cur'); if (old) old.classList.remove('cur');
   body.querySelectorAll('.rd-s.past').forEach(x => { if (+x.dataset.i >= i) x.classList.remove('past'); });
@@ -3435,7 +3514,8 @@ function rdFollow(sec, jump = false) {
   place(); if (jump) { requestAnimationFrame(place); setTimeout(place, 450); }
 }
 function rdControls() {
-  const t = T(RD.id); if (!t) return;
+  const t = rdT(RD.id); if (!t) return;
+  if (RD.v?.map.has(t.id)) { $('#rd-left').textContent = 'Listening starts once your Mac narrates it'; return; }
   const playing = current()?.id === t.id && !engine.el.paused;
   $('#rd-play use').setAttribute('href', playing ? '#i-pause' : '#i-play');
   $('#rd-speed').textContent = (isBook(current()) ? P.speed || 1 : rdPrefs().speed || S.settings.bookSpeed || 1) + '×';
@@ -3445,7 +3525,7 @@ function rdControls() {
 }
 /** Play from a sentence (or from where you are). */
 async function rdPlayAt(i) {
-  const t = T(RD.id); if (!t) return;
+  const t = rdT(RD.id); if (!t) return;
   const at = i >= 0 && rdText(t) ? rdText(t)[i][0] / 1000 : null;
   if (current()?.id !== t.id) {
     const key = bookKey(t), ch = bookChapters(key);
@@ -3461,7 +3541,7 @@ async function rdPlayAt(i) {
 setInterval(() => {
   if (!RD.id || $('#reader').hidden) return;
   const c = current();
-  if (c && isBook(c) && c.id !== RD.id && bookKey(c) === bookKey(T(RD.id) || {}) && !engine.el.paused) { RD.id = c.id; paintReader(); return; }
+  if (c && isBook(c) && c.id !== RD.id && bookKey(c) === bookKey(rdT(RD.id) || {}) && !engine.el.paused) { RD.id = c.id; paintReader(); return; }
   if (c?.id === RD.id && !engine.el.paused) rdFollow(engine.el.currentTime);
   rdControls();
 }, 250);
@@ -3485,7 +3565,7 @@ function bindReader() {
       const x = e.clientX / window.innerWidth;
       if (x < .22) return rdTurn(-1); if (x > .78) return rdTurn(1);
     }
-    if (sp) { haptic(); rdPlayAt(+sp.dataset.i); }
+    if (sp && !RD.v?.map.has(RD.id)) { haptic(); rdPlayAt(+sp.dataset.i); }
   });
   const mark = () => { RD.userScrolled = Date.now(); };
   body.addEventListener('touchstart', mark, { passive: true }); body.addEventListener('wheel', mark, { passive: true });
@@ -3493,11 +3573,11 @@ function bindReader() {
   let sx = null, sy = 0;
   body.addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
   body.addEventListener('touchend', e => { if (sx === null || RD.mode !== 'page') return; const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy; sx = null; if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) { RD.swiped = Date.now(); rdTurn(dx < 0 ? 1 : -1); } }, { passive: true });
-  window.addEventListener('resize', () => { if (RD.id && RD.mode === 'page') { rdPaginate(); rdFollow(rdSpot(T(RD.id)), true); } });
+  window.addEventListener('resize', () => { if (RD.id && RD.mode === 'page') { rdPaginate(); rdFollow(rdSpot(rdT(RD.id)), true); } });
   document.addEventListener('keydown', e => { if (!RD.id || $('#reader').hidden) return; if (e.key === 'Escape') history.back(); if (RD.mode === 'page' && e.key === 'ArrowRight') rdTurn(1); if (RD.mode === 'page' && e.key === 'ArrowLeft') rdTurn(-1); if (e.key === ' ') { e.preventDefault(); rdPlayAt(-1); } });
 }
 function rdChapters() {
-  const t = T(RD.id), key = bookKey(t), ch = bookChapters(key);
+  const t = rdT(RD.id), ch = rdList(t);
   sheet(`<h2>${esc(t.album || 'Chapters')}</h2><div class="rd-chlist">${ch.map((c, i) => `<button class="rd-chrow${c.id === RD.id ? ' on' : ''}" data-id="${esc(c.id)}"><span class="ch-n">${i + 1}</span><span class="ellipsis">${esc(c.title)}</span><span class="ch-time">${c.duration ? leftTxt(c.duration) : ''}</span></button>`).join('')}</div>`, el => {
     el.querySelectorAll('.rd-chrow').forEach(b => b.onclick = () => { closeSheet(); RD.id = b.dataset.id; paintReader(); });
     el.querySelector('.rd-chrow.on')?.scrollIntoView({ block: 'center' });
@@ -3509,7 +3589,7 @@ function rdLook() {
     <div class="rd-sizes"><button data-sz="-1" aria-label="Smaller text">A</button><button data-sz="1" aria-label="Larger text">A</button></div>
     <div class="rd-themes">${[['paper', 'Paper'], ['sepia', 'Sepia'], ['gray', 'Gray'], ['night', 'Night']].map(([k, l]) => `<button class="rd-th th-${k}${p.theme === k ? ' on' : ''}" data-th="${k}"><span>Aa</span><em>${l}</em></button>`).join('')}</div>
     <p class="muted rd-look-note">Themes change Page mode. Read along always uses the book’s colors.</p></div>`, el => {
-    el.querySelectorAll('[data-sz]').forEach(b => b.onclick = () => { const sz = Math.max(15, Math.min(30, rdPrefs().size + +b.dataset.sz)); rdSave({ size: sz }); $('#reader').style.setProperty('--rd-size', sz + 'px'); if (RD.mode === 'page') { rdPaginate(); rdFollow(rdSpot(T(RD.id)), true); } });
+    el.querySelectorAll('[data-sz]').forEach(b => b.onclick = () => { const sz = Math.max(15, Math.min(30, rdPrefs().size + +b.dataset.sz)); rdSave({ size: sz }); $('#reader').style.setProperty('--rd-size', sz + 'px'); if (RD.mode === 'page') { rdPaginate(); rdFollow(rdSpot(rdT(RD.id)), true); } });
     el.querySelectorAll('[data-th]').forEach(b => b.onclick = () => { rdSave({ theme: b.dataset.th }); el.querySelectorAll('[data-th]').forEach(x => x.classList.toggle('on', x === b)); $('#reader').dataset.theme = b.dataset.th; });
   });
 }
@@ -3528,8 +3608,8 @@ function bookTile([key, ch]) {
     <a class="bt-t ellipsis" href="#/book/${encodeURIComponent(key)}">${esc(t.album || t.title)}</a><div class="bt-s ellipsis">${esc(sub)}</div></div>`;
 }
 function queueTile(b) {
-  return `<div class="bt"><div class="bt-art"><div class="bt-cover"><div class="book-cover big bt-blank"><span>${esc(b.name.replace(/\s*\(.*$/, ''))}</span></div></div><span class="bt-badge">${b.status === 'waiting' ? icon('book') : ring(pctOf(b.line), '#ff9f0a')}</span></div>
-    <div class="bt-t ellipsis">${esc(b.name.replace(/\s*\(.*$/, ''))}</div><div class="bt-s ellipsis">${b.status === 'waiting' ? 'Waiting for your Mac' : b.status === 'failed' ? 'Couldn’t narrate this one' : 'Narrating on your Mac'}</div></div>`;
+  return `<div class="bt"><div class="bt-art"><div class="bt-cover" data-action="read-queued" data-id="${esc(b.id)}" role="button">${b.cover ? `<div class="book-cover big"><img src="${b.cover}" alt=""></div>` : `<div class="book-cover big bt-blank"><span>${esc(b.name.replace(/\s*\(.*$/, ''))}</span></div>`}</div><span class="bt-badge">${b.status === 'waiting' ? icon('book') : ring(pctOf(b.line), '#ff9f0a')}</span></div>
+    <div class="bt-t ellipsis">${esc(b.name.replace(/\s*\(.*$/, ''))}</div><div class="bt-s ellipsis">${/\.epub$/i.test(b.file || '') ? 'Tap to read · ' : ''}${b.status === 'waiting' ? 'Waiting for your Mac' : b.status === 'failed' ? 'Couldn’t narrate this one' : 'Narrating on your Mac'}</div></div>`;
 }
 VIEWS.books = () => {
   const all = [...books()].map(([k, ch]) => [k, ch, bookSpot(k)]);
@@ -4971,7 +5051,7 @@ const ACT2 = {
 };
 
 /* for checking things from the console */
-window.__fof = { openReader, rdFollow: s => rdFollow(s, true), growPlaylists, cleanupScan, runCleanup, undoCleanup, S, P };
+window.__fof = { epubChapters, readQueued, epubInfo, openReader, rdFollow: s => rdFollow(s, true), growPlaylists, cleanupScan, runCleanup, undoCleanup, S, P };
 
 /* =====================================================================
    Mac app: imports new songs from your folders in the background and
