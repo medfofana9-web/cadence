@@ -2911,7 +2911,7 @@ document.addEventListener('click', async e => {
       case 'skip-fwd': { const el = engine.el; el.currentTime = Math.min((el.duration || 1e9) - 1, el.currentTime + 30); return; }
       case 'book-restart': return bookRestart(a.dataset.book);
       case 'read-queued': return readQueued(id);
-      case 'listen-queued': { const ok = await readQueued(id); if (ok) ttsFrom(0); return; }
+      case 'listen-queued': return readQueued(id, null, true);
       case 'book-filter': S.bookFilter = a.dataset.f; return render();
       case 'book-read': { const ch = bookChapters(a.dataset.book); const c = ch.find(x => x.id === current()?.id) || ch[bookSpot(a.dataset.book).i]; return c && openReader(c.id); }
       case 'read-now': return current() && openReader(current().id);
@@ -3404,6 +3404,11 @@ function rdSave(p) { S.settings.reader = { ...rdPrefs(), ...p }; saveSettings();
 const rdText = t => t?.read?.s || null;
 function rdIndexAt(t, sec) { const s = rdText(t); if (!s) return -1; const ms = sec * 1000 + 120; let lo = 0, hi = s.length - 1, r = 0; while (lo <= hi) { const m = (lo + hi) >> 1; if (s[m][0] <= ms) { r = m; lo = m + 1; } else hi = m - 1; } return r; }
 /** Opens the reader on a chapter: the one playing, else where you left off in that book. */
+function vSave(t, i) {
+  const [bid, ch] = t.id.split(':'); const k = 'v:' + bid, old = S.pod.prog[k];
+  if (old && old.ch === +ch && Math.abs((old.i || 0) - i) < 3 && Date.now() - old.at < 15000) return;
+  S.pod.prog[k] = { ch: +ch, i, title: t.title, n: RD.v.list.length, at: Date.now() }; podSave();
+}
 /** Read a book that hasn't been narrated yet, straight from its EPUB. */
 async function epubChapters(buf) {
   const bytes = new Uint8Array(buf), view = new DataView(bytes.buffer), dec = new TextDecoder();
@@ -3503,7 +3508,7 @@ async function fillCovers() {
     try { const url = await cloud.fileUrl(b.path, b.r2); if (!url) continue; const info = await epubInfo(new Blob([await (await fetch(url)).arrayBuffer()])); if (info.cover) { b.cover = info.cover; b.at = Date.now(); kv.set('bookQueue', S.bookQueue); queueStatePush(); if (S.route === 'books') render(); } } catch (e) { console.warn('cover', e); }
   }
 }
-async function readQueued(id, buf) {
+async function readQueued(id, buf, play = false) {
   const b = (S.bookQueue || []).find(x => x.id === id); if (!b) return;
   if (!/\.epub$/i.test(b.file || '')) return toast('Reading before narration works for EPUB books');
   toast('Opening the book…');
@@ -3513,7 +3518,11 @@ async function readQueued(id, buf) {
     if (!chs.length) return toast('Couldn’t find the text in this book');
     const title = b.name.replace(/\s*\(.*$/, ''), list = chs.map((c, i) => ({ id: `${b.id}:${i}`, title: c.title, album: title, artist: '', read: c.read, art: b.cover }));
     RD.v = { map: new Map(list.map(c => [c.id, c])), list, voice: b.voice || 'american' };
-    openReader(list[0].id); return true;
+    const sp = S.pod.prog['v:' + b.id], start = sp && list[sp.ch] ? sp.ch : 0, at = sp && list[sp.ch] ? sp.i || 0 : 0;
+    openReader(list[start].id);
+    if (at) setTimeout(() => rdFollow(0, true, at), 350);
+    if (play) setTimeout(() => ttsFrom(at), 400);
+    return true;
   } catch (e) { console.warn(e); toast('Couldn’t open the book right now. Try again in a moment.'); }
 }
 function openReader(id) {
@@ -3548,6 +3557,7 @@ function paintReader() {
   body.innerHTML = `<div class="rd-flow"><div class="rd-head"><div class="rd-eyebrow">${esc(t.album || '')}</div><h1>${esc(t.title)}</h1></div>${html}
     <div class="rd-end">${nextCh ? `<button class="rd-next" data-action="rd-open" data-id="${esc(nextCh.id)}"><span>Next</span><b>${esc(nextCh.title)}</b></button>` : `<div class="rd-fin">The end</div>`}</div></div>`;
   RD.idx = -1; RD.page = -1;
+  if (RD.v?.map.has(t.id) && S.pod.prog['v:' + t.id.split(':')[0]]?.ch !== +t.id.split(':')[1]) vSave(t, 0);
   if (RD.mode === 'page') rdPaginate();
   rdFollow(rdSpot(t), true);
   rdControls();
@@ -3557,7 +3567,8 @@ function rdPaginate() {
   body.style.setProperty('--pw', body.clientWidth + 'px');
   requestAnimationFrame(() => { RD.pages = Math.max(1, Math.round(flow.scrollWidth / body.clientWidth)); rdPageLabel(); });
 }
-function rdPageLabel() { const b = $('#rd-body'); const i = Math.round(b.scrollLeft / Math.max(1, b.clientWidth)); RD.page = i; $('#rd-pos').textContent = RD.mode === 'page' ? `${i + 1} of ${RD.pages || 1}` : ''; }
+function rdPageLabel() { const b = $('#rd-body'); const i = Math.round(b.scrollLeft / Math.max(1, b.clientWidth)); RD.page = i;
+  if (RD.v?.map.has(RD.id) && !TTS.on) { clearTimeout(rdPageLabel.t); rdPageLabel.t = setTimeout(() => { const br = b.getBoundingClientRect(); const first = [...b.querySelectorAll('.rd-s')].find(x => { const r = x.getClientRects()[0]; return r && r.left >= br.left - 2 && r.left < br.right; }); if (first) vSave(rdT(RD.id), +first.dataset.i); }, 600); } $('#rd-pos').textContent = RD.mode === 'page' ? `${i + 1} of ${RD.pages || 1}` : ''; }
 function rdTurn(dir) { const b = $('#rd-body'); RD.userScrolled = Date.now(); const to = Math.max(0, Math.min((RD.pages || 1) - 1, Math.round(b.scrollLeft / b.clientWidth) + dir)); b.scrollTo({ left: to * b.clientWidth, behavior: 'smooth' }); }
 /** Lights up the sentence being spoken and keeps it in view (or turns to its page). */
 function rdFollow(sec, jump = false, at = null) {
@@ -3568,6 +3579,7 @@ function rdFollow(sec, jump = false, at = null) {
   const cur = body.querySelector(`.rd-s[data-i="${i}"]`); if (!cur) return;
   for (let k = Math.max(0, RD.idx < 0 || RD.idx > i ? 0 : RD.idx); k < i; k++) body.querySelector(`.rd-s[data-i="${k}"]`)?.classList.add('past');
   cur.classList.add('cur'); RD.idx = i;
+  if (RD.v?.map.has(t.id)) vSave(t, i);
   if (RD.userScrolled && Date.now() - RD.userScrolled < 4000 && !jump) return;
   const place = () => { const cr = cur.getClientRects()[0] || cur.getBoundingClientRect(), br = body.getBoundingClientRect();
   if (RD.mode === 'page') { const pg = Math.floor((cr.left - br.left + body.scrollLeft + 2) / body.clientWidth); if (pg !== RD.page) { body.scrollTo({ left: pg * body.clientWidth, behavior: jump ? 'instant' : 'smooth' }); RD.page = pg; } }
@@ -3686,7 +3698,7 @@ function bookTile([key, ch]) {
 }
 function queueTile(b) {
   return `<div class="bt"><div class="bt-art"><div class="bt-cover" data-action="read-queued" data-id="${esc(b.id)}" role="button">${b.cover ? `<div class="book-cover big"><img src="${b.cover}" alt=""></div>` : `<div class="book-cover big bt-blank"><span>${esc(b.name.replace(/\s*\(.*$/, ''))}</span></div>`}</div>${/\.epub$/i.test(b.file || '') ? `<button class="bt-badge bt-play" data-action="listen-queued" data-id="${esc(b.id)}" aria-label="Listen">${b.status === 'narrating' ? ring(pctOf(b.line), '#ff9f0a') : ''}${icon('play')}</button>` : `<span class="bt-badge">${ring(pctOf(b.line), '#ff9f0a')}</span>`}</div>
-    <div class="bt-t ellipsis">${esc(b.name.replace(/\s*\(.*$/, ''))}</div><div class="bt-s ellipsis">${b.voice === 'british' ? 'British voice' : 'American voice'} · ${b.status === 'narrating' ? `Mac narrating${pctOf(b.line) ? ' ' + pctOf(b.line) + '%' : ''}` : 'Ready to play'}</div></div>`;
+    <div class="bt-t ellipsis">${esc(b.name.replace(/\s*\(.*$/, ''))}</div><div class="bt-s ellipsis">${b.voice === 'british' ? 'British voice' : 'American voice'} · ${S.pod.prog['v:' + b.id] ? `${Math.round((S.pod.prog['v:' + b.id].ch / (S.pod.prog['v:' + b.id].n || 1)) * 100)}% · Continue` : 'Ready to play'}</div></div>`;
 }
 VIEWS.books = () => {
   setTimeout(fillCovers, 300);
@@ -3695,12 +3707,20 @@ VIEWS.books = () => {
   const add = `<button class="pill-btn bk-add" data-action="add-book">${icon('plus')}Add a book</button>`;
   if (!all.length && !pending.length) return `<div class="page-head"><h1>Audiobooks</h1></div><div class="empty-state book-empty">${icon('book')}<h2>Your own audiobooks</h2><p>${BOOK_HOW}</p><button class="btn primary" data-action="add-book">${icon('plus')}Add a book</button></div>`;
   const going = all.filter(x => x[2]?.started && !x[2].finished).sort((a, b) => b[2].at - a[2].at);
-  const pick = going[0] || all.find(x => !narratingFor(x[1][0].album)) || all[0];
+  const vGoing = pending.map(b => [b, S.pod.prog['v:' + b.id]]).filter(x => x[1]).sort((a, b) => b[1].at - a[1].at)[0];
+  const pick = vGoing && (!going[0] || vGoing[1].at > going[0][2].at) ? null : going[0] || all.find(x => !narratingFor(x[1][0].album)) || all[0];
   let hero = '';
+  if (!pick && vGoing) {
+    const [b, sp] = vGoing, pct = sp.n ? Math.round(sp.ch / sp.n * 100) : 0;
+    hero = `<div class="bk-hero-row"><a data-action="read-queued" data-id="${esc(b.id)}" role="button">${b.cover ? `<div class="book-cover big"><img src="${b.cover}" alt=""></div>` : `<div class="book-cover big bt-blank"><span>${esc(b.name.replace(/\s*\(.*$/, ''))}</span></div>`}</a><div class="bk-hero-meta">
+        <div class="bk-eb">Continue listening</div><a class="bk-ht" data-action="read-queued" data-id="${esc(b.id)}" role="button">${esc(b.name.replace(/\s*\(.*$/, ''))}</a><div class="bk-ha">${esc((/\((.*)\)/.exec(b.name) || [])[1] || '')}</div>
+        <div class="bk-hc ellipsis">${esc(sp.title || '')}</div><div class="bk-hp"><span class="pod-bar"><i style="width:${pct}%"></i></span>${pct}%</div></div></div>
+      <div class="bk-acts"><button class="bk-btn light" data-action="listen-queued" data-id="${esc(b.id)}">${icon(TTS.on && RD.v?.list[0].id.startsWith(b.id + ':') ? 'pause' : 'play')}Continue</button><button class="bk-btn glass" data-action="read-queued" data-id="${esc(b.id)}">${icon('read')}Read</button></div>`;
+  }
   if (pick) {
     const [k, ch, sp] = pick, st = bookStats(k), t = ch[sp.i] || ch[0], playing = ch.some(c => c.id === current()?.id) && !engine.el.paused;
     hero = `<div class="bk-hero-row"><a href="#/book/${encodeURIComponent(k)}">${bookCover(t, 'big')}</a><div class="bk-hero-meta">
-        <div class="bk-eb">${sp.started && !sp.finished ? 'Continue' : 'Start listening'}</div><a class="bk-ht" href="#/book/${encodeURIComponent(k)}">${esc(t.album || t.title)}</a><div class="bk-ha">${esc(t.artist)}</div>
+        <div class="bk-eb">${sp.started && !sp.finished ? 'Continue listening' : 'Start listening'}</div><a class="bk-ht" href="#/book/${encodeURIComponent(k)}">${esc(t.album || t.title)}</a><div class="bk-ha">${esc(t.artist)}</div>
         <div class="bk-hc ellipsis">${esc(t.title)}</div><div class="bk-hp"><span class="pod-bar"><i style="width:${st.pct}%"></i></span>${esc(leftTxt(sp.started ? st.left : st.total))}${sp.started ? ' left' : ''}</div></div></div>
       <div class="bk-acts"><button class="bk-btn light" data-action="book-play" data-book="${esc(k)}">${icon(playing ? 'pause' : 'play')}${playing ? 'Pause' : 'Listen'}</button><button class="bk-btn glass" data-action="book-read" data-book="${esc(k)}">${icon('read')}Read</button></div>`;
   }
@@ -3708,8 +3728,8 @@ VIEWS.books = () => {
   const list = all.filter(([, ch, sp]) => f === 'all' || (f === 'listening' && sp?.started && !sp.finished) || (f === 'finished' && sp?.finished) || (f === 'narrating' && narratingFor(ch[0].album)));
   const tiles = [...(f === 'all' || f === 'narrating' ? pending.map(queueTile) : []), ...list.map(([k, ch]) => bookTile([k, ch]))];
   const chips = [['all', 'All'], ['listening', 'Listening'], ['narrating', 'Narrating'], ['finished', 'Finished']].map(([k, l]) => `<button class="chip ${f === k ? 'on' : ''}" data-action="book-filter" data-f="${k}">${l}</button>`).join('');
-  const lead = pick ? pick[1][pick[2].i] || pick[1][0] : null;
-  return `<section class="bk-hero">${lead ? `<div class="bk-hero-bg"><img src="${artOf(lead, 'full')}" alt=""></div>` : ''}<div class="bk-hero-in">
+  const lead = pick ? pick[1][pick[2].i] || pick[1][0] : null, bg = lead ? artOf(lead, 'full') : vGoing?.[0].cover;
+  return `<section class="bk-hero">${bg ? `<div class="bk-hero-bg"><img src="${bg}" alt=""></div>` : ''}<div class="bk-hero-in">
       <div class="bk-top"><h1>Audiobooks</h1>${add}</div>${hero}</div></section>
     <div class="chips bk-chips">${chips}</div>
     ${tiles.length ? `<div class="bk-grid">${tiles.join('')}</div>` : `<p class="muted bk-none">No books here yet.</p>`}
