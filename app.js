@@ -275,7 +275,7 @@ function queueStatePush(now) {
   P.pushedAt = Date.now();
   pushT = setTimeout(() => {
     const { volume, ...settings } = S.settings;
-    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes, pod: { subs: S.pod.subs, prog: S.pod.prog }, eps: Object.keys(S.pod.prog).slice(-150).map(id => S.ext.get(id)).filter(Boolean).map(({ path, local, ...e }) => e), quran: S.quranSpot || null, quranSaved: S.quranSaved || [], want: (S.want || []).slice(0, 400), bookQueue: S.bookQueue || [], player: playerSnap() }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
+    cloud.pushState({ history: S.history.slice(0, 200), log: S.log.slice(-3000), ctxs: S.ctxs, searches: S.searches, settings, settingsAt: S.settingsAt || 0, dupIgnore: S.dupIgnore, channels: S.channels, fixes: S.fixes, pod: { subs: S.pod.subs, prog: S.pod.prog }, eps: Object.keys(S.pod.prog).slice(-150).map(id => S.ext.get(id)).filter(Boolean).map(({ path, local, ...e }) => e), quran: S.quranSpot || null, quranSaved: S.quranSaved || [], want: (S.want || []).slice(0, 400), bookQueue: S.bookQueue || [], bookmarks: S.bookmarks || [], player: playerSnap() }).then(() => { S.lastSync = Date.now(); }).catch(e => syncFailed(e));
   }, now ? 0 : 4000);
 }
 
@@ -296,7 +296,7 @@ async function boot() {
   S.quranSpot = await kv.get('quranSpot', null);
   S.quranSaved = await kv.get('quranSaved', []);
   CHECK.lists = await kv.get('playlistChecks', []);
-  S.bookQueue = await kv.get('bookQueue', []); S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
+  S.bookQueue = await kv.get('bookQueue', []); S.bookmarks = await kv.get('bookmarks', []); S.want = await kv.get('want', []); S.wantNew = await kv.get('wantNew', 0);
   S.cleanNoArt = await kv.get('cleanNoArt', []); S.qOff = await kv.get('qOff', {}); S.offPaths = await kv.get('offPaths', {}); S.deskPaths = window.fofDesktop ? await kv.get('deskPaths', {}) : {};
   for (const [id, p] of pls) S.playlists.set(id, p);
   for (const [id, b] of arts) { if (id.startsWith('pl:')) S.plCovers.set(id.slice(3), URL.createObjectURL(b)); else S.art.set(id, b); }
@@ -444,6 +444,7 @@ function mergeState(d) {
     S.pod = { ...S.pod, subs, prog }; kv.set('pod', S.pod);
   }
   for (const e of d.eps || []) if (!S.ext.has(e.id)) S.ext.set(e.id, e);
+  if (d.bookmarks) { const seen = new Set((S.bookmarks || []).map(b => b.id + b.at)); S.bookmarks = [...(S.bookmarks || []), ...d.bookmarks.filter(b => !seen.has(b.id + b.at))].sort((a, b) => b.at - a.at); kv.set('bookmarks', S.bookmarks); }
   if (d.bookQueue) { const m = new Map((S.bookQueue || []).map(b => [b.id, b])); for (const b of d.bookQueue) if (!m.has(b.id) || (b.at || 0) > (m.get(b.id).at || 0)) m.set(b.id, b); S.bookQueue = [...m.values()].filter(b => b.status !== 'done' || Date.now() - b.at < 3 * DAY).sort((a, b) => b.added - a.added); kv.set('bookQueue', S.bookQueue); if (DESK_BOOKS) setTimeout(takeBooks, 2000); if (S.route === 'books') render(); }
   if (d.want) { const m = new Map((S.want || []).map(w => [w.key + (w.arrived ? '+' : ''), w])); for (const w of d.want) { const k = w.key + (w.arrived ? '+' : ''); if (!m.has(k) && !(w.arrived ? false : (S.want || []).some(x => x.key === w.key && x.arrived))) m.set(k, w); } S.want = [...m.values()].sort((a, b) => b.at - a.at); kv.set('want', S.want); }
   if (d.quranSaved) { const m = new Map((S.quranSaved || []).map(x => [x.s + ':' + x.v, x])); for (const x of d.quranSaved) if (!m.has(x.s + ':' + x.v)) m.set(x.s + ':' + x.v, x); S.quranSaved = [...m.values()]; kv.set('quranSaved', S.quranSaved); }
@@ -1896,7 +1897,7 @@ async function loadTrack(id, { autoplay = true, quiet = false } = {}) {
   flushListen();
   const src = await srcFor(t);
   if (!src) {
-    if (!quiet) toast(!t.local && t.cloud && !S.user ? 'Sign in to play songs from your cloud library' : !navigator.onLine && t.cloud ? 'You’re offline and this song isn’t saved on this device' : t.cloud && cloud.lastFileError ? `Couldn’t reach your music (${cloud.lastFileError}). Try again in a moment.` : 'This song isn’t available on this device');
+    if (!quiet) toast(!t.local && t.cloud && !S.user ? 'Sign in to play songs from your cloud library' : !navigator.onLine && t.cloud ? 'You’re offline and this song isn’t saved on this device' : t.cloud && cloud.lastFileError ? `Couldn’t reach your music (${cloud.lastFileError}). Try again in a moment.` : (isBook(t) ? 'This chapter isn’t on this device yet. It’ll be ready once it syncs.' : 'This song isn’t available on this device'));
     return false;
   }
   P.preloadFor = null; P.fadeStarted = false; P.counted = false; P.lyrics = null; P.lyricLine = -1; P.follow = true; if (P.resumeId !== id) { P.resumeAt = 0; P.resumeId = null; }
@@ -2016,6 +2017,7 @@ function paintNow(t) {
   $('#now-mini-title').textContent = t.title; $('#now-mini-artist').textContent = t.artist; $('#now-mini-art').src = artOf(t);
   if (t.ext) delete $('#now-artist').dataset.action; else $('#now-artist').dataset.action = 'artist-more';
   document.body.classList.toggle('book-mode', isBook(t));
+  { const tl = $('#tab-lyrics'); if (tl) tl.lastChild.textContent = isBook(t) ? 'Chapters' : 'Lyrics'; }
   $('#now-artist').href = isBook(t) ? '#/book/' + encodeURIComponent(bookKey(t)) : t.kind === 'yt' ? '#/feysal/' + t.albumKey : t.kind === 'episode' ? '#/show/' + t.showId : t.kind === 'ayah' ? '#/quran/' + t.surah : '#/artist/' + encodeURIComponent(mainArtist(t.artist));
   $('#now-from').textContent = P.mode === 'flow' ? 'Fof Flow' : P.context ? 'Playing from ' + P.context : '';
   ['#p-like', '#now-like'].forEach(s => $(s).classList.toggle('on', !!t.liked));
@@ -2111,6 +2113,7 @@ function paintTime() {
 }
 function onTime() {
   const el = engine.el, d = el.duration || 0, c = el.currentTime || 0;
+  if (isBook(current()) && Math.floor(c * 4) % 4 === 0) bookTime(current(), c);
   if (!el.paused && Date.now() - lastSpotSave > 5000) { lastSpotSave = Date.now(); P.activeAt = Date.now(); savePlayer(true); } // the spot survives the app being closed
   if (!el.paused && S.user && Date.now() - (P.pushedAt || 0) > 90000) queueStatePush(); // other devices see roughly where you are
   paintTime(); qTick(c);
@@ -2916,6 +2919,8 @@ document.addEventListener('click', async e => {
       case 'book-restart': return bookRestart(a.dataset.book);
       case 'read-queued': return readQueued(id);
       case 'listen-queued': return readQueued(id, null, true);
+      case 'bookmark': return addBookmark();
+      case 'bookmark-go': return goBookmark(id, +a.dataset.t);
       case 'book-filter': S.bookFilter = a.dataset.f; return render();
       case 'book-read': { const ch = bookChapters(a.dataset.book); const c = ch.find(x => x.id === current()?.id) || ch[bookSpot(a.dataset.book).i]; return c && openReader(c.id); }
       case 'read-now': return current() && openReader(current().id);
@@ -3669,6 +3674,32 @@ function bindReader() {
   window.addEventListener('resize', () => { if (RD.id && RD.mode === 'page') { rdPaginate(); rdFollow(rdSpot(rdT(RD.id)), true); } });
   document.addEventListener('keydown', e => { if (!RD.id || $('#reader').hidden) return; if (e.key === 'Escape') history.back(); if (RD.mode === 'page' && e.key === 'ArrowRight') rdTurn(1); if (RD.mode === 'page' && e.key === 'ArrowLeft') rdTurn(-1); if (e.key === ' ') { e.preventDefault(); rdPlayAt(-1); } });
 }
+/** "Chapter 3 of 12 · 4 hr 10 min left in book" under the player's progress bar. */
+function bookTime(t, c) {
+  const el = $('#now-booktime'); if (!el) return;
+  const ch = bookChapters(bookKey(t)), n = ch.findIndex(x => x.id === t.id), rate = P.speed || 1;
+  const left = (ch.slice(n + 1).reduce((a, x) => a + (x.duration || 0), 0) + Math.max(0, (engine.el.duration || t.duration || 0) - c)) / rate;
+  const q = narratingFor(t.album), total = ofTotal(q?.line) || ch.length;
+  el.textContent = `Chapter ${n + 1} of ${total} · ${leftTxt(left)} left${q ? ' so far' : ' in book'}${rate !== 1 ? ` at ${rate}×` : ''}`;
+}
+/** Bookmarks: save the spot you're at (in any book), see them on the book page, tap to jump back. */
+function addBookmark() {
+  const t = current(); if (!isBook(t)) return;
+  const at = Math.round(engine.el.currentTime || 0), s = rdText(t), i = s ? rdIndexAt(t, at) : -1;
+  S.bookmarks = [{ id: t.id, t: at, quote: i >= 0 ? s[i][1].slice(0, 160) : '', at: Date.now() }, ...(S.bookmarks || [])].slice(0, 500);
+  kv.set('bookmarks', S.bookmarks); queueStatePush(); haptic(); toast('Bookmarked');
+}
+function bookmarksHtml(key) {
+  const ch = bookChapters(key), ids = new Set(ch.map(c => c.id)), list = (S.bookmarks || []).filter(b => ids.has(b.id));
+  if (!list.length) return '';
+  return `<section class="section"><div class="section-head"><h2>Bookmarks</h2></div><div class="bk-marks">${list.map(b => { const c = T(b.id); return `<button class="bk-mark" data-action="bookmark-go" data-id="${esc(b.id)}" data-t="${b.t}"><span class="bm-ic">${icon('mark')}</span><span class="bm-main"><b>${esc(c?.title || '')} · ${fmt(b.t)}</b>${b.quote ? `<em>“${esc(b.quote)}”</em>` : ''}</span></button>`; }).join('')}</div></section>`;
+}
+async function goBookmark(id, at) {
+  const t = T(id); if (!t) return; const ch = bookChapters(bookKey(t));
+  S.pod.prog[id] = { t: at, d: t.duration || 0, done: false, at: Date.now() };
+  if (current()?.id === id) { engine.el.currentTime = at; if (engine.el.paused) engine.el.play(); return; }
+  await playList(ch.map(x => x.id), ch.findIndex(x => x.id === id), { context: t.album || 'Audiobook', ctxRoute: 'book/' + encodeURIComponent(bookKey(t)) });
+}
 /** Switch narrator for a book that's playing in the app's own voice. */
 function rdVoice() {
   if (!RD.v) return toast('This book was narrated on your Mac in its voice');
@@ -3766,7 +3797,7 @@ VIEWS.book = () => {
       ${sp.started && !sp.finished ? `<div class="bk-dp"><span class="pod-bar"><i style="width:${st.pct}%"></i></span></div><div class="bk-at ellipsis">${esc(ch[sp.i].title)}</div>` : ''}
       <div class="bk-acts"><button class="bk-btn light" data-action="book-play" data-book="${esc(key)}">${icon(playingHere ? 'pause' : 'play')}${label}</button><button class="bk-btn glass" data-action="book-read" data-book="${esc(key)}">${icon('read')}Read</button></div>
       ${sp.started ? `<button class="link bk-restart" data-action="book-restart" data-book="${esc(key)}">Start over</button>` : ''}</div></section>
-    <section class="section bk-chs"><div class="section-head"><h2>Chapters</h2></div><div class="book-chapters">${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div></section>`;
+    ${bookmarksHtml(key)}<section class="section bk-chs"><div class="section-head"><h2>Chapters</h2></div><div class="book-chapters">${ch.map((c, i) => chapterRow(c, i, key)).join('')}</div></section>`;
 };
 VIEWS.podcasts = () => {
   S.pod.subs.forEach(s => showEps(s.id));

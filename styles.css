@@ -1665,3 +1665,14 @@ body:not(.is-paused) .dr-play .when-paused{display:none}
 .bk-search input{border:0;background:none;color:var(--text);font:inherit;font-size:13.5px;width:150px;outline:none}
 .bk-sort{height:34px;border-radius:17px;border:0;padding:0 12px;background:rgba(127,127,127,.12);color:var(--text);font:inherit;font-size:13.5px}
 @media (max-width:700px){.bk-find{width:100%}.bk-search{flex:1}.bk-search input{width:100%}}
+.now-booktime{justify-content:center;margin-top:6px;font-size:12.5px;color:rgba(255,255,255,.62);font-variant-numeric:tabular-nums;text-align:center}
+.book-mode .now-booktime{display:block}
+.bk-marks{display:flex;flex-direction:column;gap:8px}
+.bk-mark{display:flex;gap:12px;align-items:flex-start;text-align:left;padding:12px 14px;border:0;border-radius:14px;background:rgba(127,127,127,.09);color:var(--text);cursor:pointer;font:inherit}
+.bk-mark:hover{background:rgba(127,127,127,.14)}
+.bm-ic{color:var(--accent);flex:none}.bm-ic svg{width:18px;height:18px}
+.bm-main{display:flex;flex-direction:column;gap:3px;min-width:0}
+.bm-main b{font-size:14px;font-weight:600}.bm-main em{font-style:normal;font-size:13px;color:var(--muted);line-height:1.45}
+#mark-btn svg{width:16px;height:16px}
+.book-mode #tab-queue,.book-mode #ic-queue{display:none}
+@media (max-width:700px){.book-mode #mark-btn span,.book-mode #read-btn span{display:none}.book-mode #mark-btn,.book-mode #read-btn{padding:0 11px}}
