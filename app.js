@@ -8,6 +8,7 @@ import * as pods from './lib/podcasts.js';
 import * as quran from './lib/quran.js';
 import * as feysal from './lib/feysal.js';
 import { YtAudio } from './lib/yt.js';
+import * as narrator from './lib/voice.js';
 import { Index, fold } from './lib/search.js';
 import { thumbnail, artColors } from './lib/image.js';
 /** The version these files belong to (stamped when published); a phone holding older files updates itself. */
@@ -2910,6 +2911,7 @@ document.addEventListener('click', async e => {
       case 'skip-fwd': { const el = engine.el; el.currentTime = Math.min((el.duration || 1e9) - 1, el.currentTime + 30); return; }
       case 'book-restart': return bookRestart(a.dataset.book);
       case 'read-queued': return readQueued(id);
+      case 'listen-queued': { const ok = await readQueued(id); if (ok) ttsFrom(0); return; }
       case 'book-filter': S.bookFilter = a.dataset.f; return render();
       case 'book-read': { const ch = bookChapters(a.dataset.book); const c = ch.find(x => x.id === current()?.id) || ch[bookSpot(a.dataset.book).i]; return c && openReader(c.id); }
       case 'read-now': return current() && openReader(current().id);
@@ -3349,14 +3351,14 @@ function sendBook(f) {
   const name = f.name.replace(/\.(epub|pdf)$/i, '').replace(/\s*\((?:z-lib|z-library|1lib)[^)]*\)\s*$/i, '').trim();
   sheet(`<h2>Which voice should read it?</h2><p class="muted">${esc(name)}</p><div class="voice-pick"><button class="btn primary" data-v="american">Deep American voice</button><button class="btn" data-v="british">Deep British voice</button></div><div class="actions"><button class="btn ghost" data-close>Cancel</button></div>`, el => {
     el.querySelectorAll('[data-v]').forEach(b => b.onclick = async () => {
-      closeSheet(); toast('Sending the book to your Mac…');
+      closeSheet(); toast('Adding your book…'); narrator.load().catch(() => {});
       const id = 'bk' + Date.now().toString(36), ext = f.name.split('.').pop().toLowerCase(), path = `books/${id}.${ext}`;
       try {
         const store = await cloud.uploadFile(path, new Blob([f], { type: ext === 'pdf' ? 'application/pdf' : 'application/epub+zip' }));
         const info = /\.epub$/i.test(f.name) ? await epubInfo(f) : {};
         S.bookQueue = [{ id, name: info.title ? `${info.title}${info.author ? ` (${info.author})` : ''}` : name, file: f.name, path, r2: store === 'r2', voice: b.dataset.v, cover: info.cover || null, status: 'waiting', added: Date.now(), at: Date.now() }, ...(S.bookQueue || [])];
         kv.set('bookQueue', S.bookQueue); queueStatePush(); render();
-        toast('Sent. Your Mac narrates it next time Fof Music is open there.');
+        toast('Added. Tap it to start listening.');
       } catch (e) { toast('Couldn’t send the book. Try again in a moment.'); console.warn(e); }
     });
   });
@@ -3450,24 +3452,39 @@ function ttsVoice() {
   for (const r of pref) { const v = vs.find(x => r.test(x.name)); if (v) return v; }
   return vs[0] || null;
 }
-function ttsStop() { TTS.on = false; TTS.n++; try { speechSynthesis.cancel(); } catch {} if (RD.id) rdControls(); }
-function ttsFrom(i) {
-  if (!('speechSynthesis' in window)) return toast('This browser can’t read aloud');
+function ttsStop() { TTS.on = false; TTS.n++; ttsHalt(); if (RD.id) rdControls(); }
+let AC = null;
+const sayText = x => x.replace(/[—–]/g, ', ').replace(/\b([Ff])\*ck/g, '$1uck').replace(/\bMr\./g, 'Mister').replace(/\bDr\./g, 'Doctor').replace(/[*_#[\]]/g, '');
+/** Plays the chapter from sentence i in the voice you picked for this book, a sentence or two ahead so there are no gaps. */
+async function ttsFrom(i) {
   const t = rdT(RD.id), s = rdText(t); if (!s) return;
-  try { speechSynthesis.cancel(); } catch {}
-  const my = ++TTS.n; TTS.on = true; RD.userScrolled = 0;
-  const say = k => {
+  ttsHalt(); const my = ++TTS.n; TTS.on = true; RD.userScrolled = 0;
+  try { AC = AC || new (window.AudioContext || window.webkitAudioContext)(); await AC.resume(); } catch {}
+  rdControls();
+  const voice = RD.v?.voice || 'american';
+  if (!narrator.ready()) {
+    $('#rd-left').textContent = `Getting the ${voice === 'british' ? 'British' : 'American'} voice ready…`;
+    try { await narrator.load(f => { if (my === TTS.n) $('#rd-left').textContent = `Getting the ${voice === 'british' ? 'British' : 'American'} voice ready · ${Math.round(f * 100)}%`; }); }
+    catch (e) { console.warn('voice', e); if (my === TTS.n) { toast('Couldn’t load the narrator voice. Check your connection and try again.'); ttsStop(); } return; }
+    if (my !== TTS.n) return; rdControls();
+  }
+  const cache = new Map(), gen = k => { if (!cache.has(k) && k < s.length) cache.set(k, narrator.speak(sayText(s[k][1]), voice).catch(() => null)); return cache.get(k); };
+  const play = async k => {
     if (my !== TTS.n || !TTS.on) return;
-    if (k >= s.length) { const ch = rdList(t), n = ch.findIndex(c => c.id === t.id); if (ch[n + 1]) { RD.id = ch[n + 1].id; paintReader(); setTimeout(() => ttsFrom(0), 400); } else ttsStop(); return; }
+    if (k >= s.length) { const ch = rdList(t), n = ch.findIndex(c => c.id === t.id); if (ch[n + 1]) { RD.id = ch[n + 1].id; paintReader(); setTimeout(() => ttsFrom(0), 300); } else ttsStop(); return; }
     rdFollow(0, false, k);
-    const u = new SpeechSynthesisUtterance(s[k][1].replace(/—/g, ', ')); const v = ttsVoice(); if (v) { u.voice = v; u.lang = v.lang; }
-    u.rate = Math.min(2, (S.settings.bookSpeed || 1) * .96); u.pitch = .92;
-    u.onend = () => setTimeout(() => say(k + 1), s[k][2] ? 380 : 60);
-    u.onerror = e => { if (e.error !== 'interrupted' && e.error !== 'canceled') ttsStop(); };
-    speechSynthesis.speak(u);
+    const a = await gen(k); gen(k + 1); gen(k + 2);
+    if (my !== TTS.n || !TTS.on) return;
+    if (!a) return play(k + 1);
+    const buf = AC.createBuffer(1, a.samples.length, a.rate); buf.copyToChannel(a.samples, 0);
+    const src = AC.createBufferSource(); src.buffer = buf; src.playbackRate.value = S.settings.bookSpeed || 1; src.connect(AC.destination);
+    TTS.src = src;
+    src.onended = () => { if (TTS.src === src) setTimeout(() => play(k + 1), (s[k][2] ? 420 : 90) / (S.settings.bookSpeed || 1)); };
+    src.start();
   };
-  say(i); rdControls();
+  play(i);
 }
+function ttsHalt() { try { TTS.src?.stop(); } catch {} TTS.src = null; try { speechSynthesis.cancel(); } catch {} }
 if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => {};
 /** Books added before covers were read from the file: fetch the cover once from the book itself. */
 const coverTried = new Set();
@@ -3487,8 +3504,8 @@ async function readQueued(id, buf) {
     const chs = await epubChapters(buf);
     if (!chs.length) return toast('Couldn’t find the text in this book');
     const title = b.name.replace(/\s*\(.*$/, ''), list = chs.map((c, i) => ({ id: `${b.id}:${i}`, title: c.title, album: title, artist: '', read: c.read, art: b.cover }));
-    RD.v = { map: new Map(list.map(c => [c.id, c])), list };
-    openReader(list[0].id);
+    RD.v = { map: new Map(list.map(c => [c.id, c])), list, voice: b.voice || 'american' };
+    openReader(list[0].id); return true;
   } catch (e) { console.warn(e); toast('Couldn’t open the book right now. Try again in a moment.'); }
 }
 function openReader(id) {
@@ -3551,7 +3568,7 @@ function rdFollow(sec, jump = false, at = null) {
 }
 function rdControls() {
   const t = rdT(RD.id); if (!t) return;
-  if (RD.v?.map.has(t.id)) { $('#rd-play use').setAttribute('href', TTS.on ? '#i-pause' : '#i-play'); $('#rd-speed').textContent = (S.settings.bookSpeed || 1) + '×'; $('#rd-left').textContent = 'Device voice until your Mac finishes narrating'; return; }
+  if (RD.v?.map.has(t.id)) { $('#rd-play use').setAttribute('href', TTS.on ? '#i-pause' : '#i-play'); $('#rd-speed').textContent = (S.settings.bookSpeed || 1) + '×'; if (!TTS.on) $('#rd-left').textContent = `${RD.v.voice === 'british' ? 'Deep British' : 'Deep American'} voice · tap play or any sentence`; return; }
   const playing = current()?.id === t.id && !engine.el.paused;
   $('#rd-play use').setAttribute('href', playing ? '#i-pause' : '#i-play');
   $('#rd-speed').textContent = (isBook(current()) ? P.speed || 1 : rdPrefs().speed || S.settings.bookSpeed || 1) + '×';
@@ -3646,8 +3663,8 @@ function bookTile([key, ch]) {
     <a class="bt-t ellipsis" href="#/book/${encodeURIComponent(key)}">${esc(t.album || t.title)}</a><div class="bt-s ellipsis">${esc(sub)}</div></div>`;
 }
 function queueTile(b) {
-  return `<div class="bt"><div class="bt-art"><div class="bt-cover" data-action="read-queued" data-id="${esc(b.id)}" role="button">${b.cover ? `<div class="book-cover big"><img src="${b.cover}" alt=""></div>` : `<div class="book-cover big bt-blank"><span>${esc(b.name.replace(/\s*\(.*$/, ''))}</span></div>`}</div><span class="bt-badge">${b.status === 'waiting' ? icon('book') : ring(pctOf(b.line), '#ff9f0a')}</span></div>
-    <div class="bt-t ellipsis">${esc(b.name.replace(/\s*\(.*$/, ''))}</div><div class="bt-s ellipsis">${/\.epub$/i.test(b.file || '') ? 'Tap to read · ' : ''}${b.status === 'waiting' ? 'Waiting for your Mac' : b.status === 'failed' ? 'Couldn’t narrate this one' : 'Narrating on your Mac'}</div></div>`;
+  return `<div class="bt"><div class="bt-art"><div class="bt-cover" data-action="read-queued" data-id="${esc(b.id)}" role="button">${b.cover ? `<div class="book-cover big"><img src="${b.cover}" alt=""></div>` : `<div class="book-cover big bt-blank"><span>${esc(b.name.replace(/\s*\(.*$/, ''))}</span></div>`}</div>${/\.epub$/i.test(b.file || '') ? `<button class="bt-badge bt-play" data-action="listen-queued" data-id="${esc(b.id)}" aria-label="Listen">${b.status === 'narrating' ? ring(pctOf(b.line), '#ff9f0a') : ''}${icon('play')}</button>` : `<span class="bt-badge">${ring(pctOf(b.line), '#ff9f0a')}</span>`}</div>
+    <div class="bt-t ellipsis">${esc(b.name.replace(/\s*\(.*$/, ''))}</div><div class="bt-s ellipsis">${b.voice === 'british' ? 'British voice' : 'American voice'} · Ready to play</div></div>`;
 }
 VIEWS.books = () => {
   setTimeout(fillCovers, 300);

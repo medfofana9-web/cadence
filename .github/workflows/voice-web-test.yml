@@ -1,0 +1,20 @@
+name: In-app narrator voice test
+on:
+  push:
+    branches: [audiobooks]
+    paths: ['lib/voice.js', 'tools/test/**', '.github/workflows/voice-web-test.yml']
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -q playwright && python -m playwright install --with-deps chromium >/dev/null
+      - run: python tools/test/voice_test.py
+      - run: |
+          for f in out-*.wav; do ffmpeg -loglevel error -y -i $f -b:a 96k ${f%.wav}.mp3; done
+          mkdir /tmp/r && cp out-*.mp3 /tmp/r/
+          git config user.name fof-bot; git config user.email bot@users.noreply.github.com
+          git checkout --orphan voice-web-out; git rm -rfq .; cp /tmp/r/* .; git add -A; git commit -qm "voice test"; git push -f origin voice-web-out
