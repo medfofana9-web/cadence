@@ -35,11 +35,14 @@ def phrases(p):  # split at sentence ends and at commas/colons/semicolons, keepi
         parts = re.split(r'(?<=[,:;])\s+', sent)
         for k, ph in enumerate(parts): out.append((ph, 'sent' if k == len(parts) - 1 else 'comma'))
     return out
+def trim(a, sr):  # cut the model's own silence at both ends so our pauses are the real pauses
+    idx = np.where(np.abs(a) > 0.012)[0]
+    return a[max(0, idx[0] - int(sr * .03)):idx[-1] + int(sr * .06)] if len(idx) else a
 for tag in ['American', 'British']:
-    m.prepare_conditionals(refs[tag], exaggeration=.7)
+    m.prepare_conditionals(refs[tag], exaggeration=.75)
     w = [np.zeros(int(m.sr * .4), np.float32)]
     for p in paras:
-        for ph, kind in phrases(p):
-            w += [m.generate(ph, exaggeration=.7, cfg_weight=.3, temperature=.75).squeeze(0).numpy(), np.zeros(int(m.sr * (.45 if kind == 'comma' else .7)), np.float32)]
-        w.append(np.zeros(int(m.sr * .8), np.float32))
-    mp3(f'{tag} 6 - Matched to his pacing', np.concatenate(w), m.sr, NATURAL)
+        for sent in re.split(r'(?<=[.!?])\s+', p):   # whole sentences keep the rise and fall
+            w += [trim(m.generate(sent, exaggeration=.75, cfg_weight=.3, temperature=.8).squeeze(0).numpy(), m.sr), np.zeros(int(m.sr * .5), np.float32)]
+        w.append(np.zeros(int(m.sr * .6), np.float32))
+    mp3(f'{tag} 7 - Matched, brisker', np.concatenate(w), m.sr, 'atempo=1.13,' + NATURAL)
