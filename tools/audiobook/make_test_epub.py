@@ -11,6 +11,7 @@ z.writestr('OEBPS/content.opf', f'<?xml version="1.0"?><package xmlns="http://ww
 nav = ''.join(f'<navPoint id="n{i}"><navLabel><text>{t}</text></navLabel><content src="c{i}.xhtml"/></navPoint>' for i, t in enumerate(ch))
 z.writestr('OEBPS/toc.ncx', f'<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>{nav}</navMap></ncx>')
 for i, (t, body) in enumerate(ch.items()):
+    body = body + '\n\n' + body
     ps = ''.join(f'<p>{p}</p>' for p in body.split('\n\n'))
     z.writestr(f'OEBPS/c{i}.xhtml', f'<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><h1>{t}</h1>{ps}</body></html>')
 z.close()
