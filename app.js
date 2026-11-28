@@ -3318,6 +3318,9 @@ function bookRestart(key) {
     podSave(); render(); bookPlay(key);
   });
 }
+// save your exact spot the moment you pause or leave, not just every few seconds
+for (const el of engine.els) el.addEventListener('pause', () => { if (el !== engine.el) return; const t = current(), d = el.duration || 0, c = el.currentTime || 0; if (!t || !d) return; if (isBook(t)) bookProgress(t, c, d); else if (t.kind === 'episode') podProgress(t, c, d); });
+window.addEventListener('pagehide', () => { const t = current(), el = engine.el; if (t && el.duration && isBook(t)) bookProgress(t, el.currentTime, el.duration); });
 /** Books keep their own speed (many people listen faster); music always goes back to normal speed. */
 function bookSpeed(on) {
   const r = on ? (S.settings.bookSpeed || 1) : 1;
