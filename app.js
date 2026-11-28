@@ -242,9 +242,15 @@ async function liveStart() {
   LIVE.starting = false;
   if (LIVE.on) liveHello(); else setTimeout(liveStart, 60000);
 }
+function liveCheck() { if (S.user && LIVE.on && !cloud.liveOn()) { LIVE.on = false; liveStart(); } }
 function liveSay(t) { if (LIVE.on) cloud.liveSend({ t, dev: DEV.id, devName: DEV.name, snap: playerSnapMine() }); }
 /** Opening the app here: ask whether another device is playing right now. */
-function liveHello() { if (!LIVE.on || document.hidden) return; LIVE.helloAt = Date.now(); liveSay('hello'); }
+function liveHello() {
+  if (!LIVE.on || document.hidden) return;
+  LIVE.helloAt = Date.now(); liveSay('hello');
+  clearTimeout(LIVE.retry);
+  LIVE.retry = setTimeout(() => { if (engine.el.paused && LIVE.helloAt) { LIVE.helloAt = Date.now(); liveSay('hello'); LIVE.retry = setTimeout(() => { if (engine.el.paused && LIVE.helloAt) { LIVE.helloAt = Date.now(); liveSay('hello'); } }, 5000); } }, 3000);
+}
 function onLive(m) {
   if (!m || m.dev === DEV.id) return;
   if (m.t === 'hello') { if (!engine.el.paused) liveSay('state'); return; }
@@ -324,8 +330,8 @@ async function boot() {
   // songs that couldn't upload earlier (bad Wi-Fi, signed out) go up on their own
   setInterval(() => autoUpload(), 5 * 60 * 1000);
   setTimeout(autoOffline, 20000); setInterval(autoOffline, 15 * 60 * 1000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkVersion(); if (S.folder && Date.now() - (S.lastScan || 0) > 30000) scanFolder(); liveHello(); if (S.user && Date.now() - S.lastSync > 60000) syncDown(); else pullLight(); } else { flushListen(); savePlayer(true); queueStatePush(true); } });
-  addEventListener('focus', () => { liveHello(); pullLight(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkVersion(); if (S.folder && Date.now() - (S.lastScan || 0) > 30000) scanFolder(); liveCheck(); liveHello(); if (S.user && Date.now() - S.lastSync > 60000) syncDown(); else pullLight(); } else { flushListen(); savePlayer(true); queueStatePush(true); } });
+  addEventListener('focus', () => { liveCheck(); liveHello(); pullLight(); });
   window.addEventListener('online', () => { if (S.user) { syncDown(); setTimeout(autoUpload, 5000); } });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (IN_APP) { renewReminder(); siriHooks(); }
@@ -360,11 +366,11 @@ async function initCloud() {
   if (!cloud.cloudConfigured()) return;
   try {
     S.user = await cloud.user();
-    if (S.user) syncDown().then(() => setTimeout(autoUpload, 5000));
+    if (S.user) { liveStart(); syncDown().then(() => setTimeout(autoUpload, 5000)); }
     const c = await cloud.sb();
     c.auth.onAuthStateChange((_e, session) => {
       const was = S.user?.id; S.user = session?.user || null;
-      if (S.user && S.user.id !== was) syncDown().then(() => setTimeout(autoUpload, 5000));
+      if (S.user && S.user.id !== was) { liveStart(); syncDown().then(() => setTimeout(autoUpload, 5000)); }
       if (S.route === 'settings') render();
     });
   } catch (e) { checkLibraryFailed = true; console.warn('cloud', e); }
